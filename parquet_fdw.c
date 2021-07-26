@@ -20,6 +20,7 @@
 #include "commands/explain.h"
 #include "foreign/fdwapi.h"
 #include "optimizer/planmain.h"
+#include "storage/ipc.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/elog.h"
