@@ -3,7 +3,7 @@
  * parquet_s3_fdw_connection.c
  *		  Connection management functions for parquet_s3_fdw
  *
- * Portions Copyright (c) 2020, TOSHIBA CORPORATION
+ * Portions Copyright (c) 2021, TOSHIBA CORPORATION
  *
  * IDENTIFICATION
  *		  contrib/parquet_s3_fdw/parquet_s3_fdw_connection.c
@@ -27,11 +27,13 @@ extern "C"
 #include "access/xact.h"
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
+#include "funcapi.h"
 #include "foreign/foreign.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/latch.h"
+#include "utils/builtins.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
@@ -86,11 +88,11 @@ typedef Oid ConnCacheKey;
 
 typedef struct ConnCacheEntry
 {
-	ConnCacheKey key;			/* hash key (must be first) */
-	Aws::S3::S3Client *conn;			/* connection to foreign server, or NULL */
+	ConnCacheKey key;				/* hash key (must be first) */
+	Aws::S3::S3Client *conn;		/* connection to foreign server, or NULL */
 	/* Remaining fields are invalid when conn is NULL: */
-	bool		have_error;		/* have any subxacts aborted in this xact? */
-	bool		invalidated;	/* true if reconnect is pending */
+	bool		invalidated;		/* true if reconnect is pending */
+	Oid 		serverid;			/* foreign server OID used to get server name */
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
 } ConnCacheEntry;
@@ -100,7 +102,19 @@ typedef struct ConnCacheEntry
  */
 static HTAB *ConnectionHash = NULL;
 
+/*
+ * SQL functions
+ */
+extern "C"
+{
+PG_FUNCTION_INFO_V1(parquet_s3_fdw_get_connections);
+PG_FUNCTION_INFO_V1(parquet_s3_fdw_disconnect);
+PG_FUNCTION_INFO_V1(parquet_s3_fdw_disconnect_all);
+}
+
 /* prototypes of private functions */
+static void make_new_connection(ConnCacheEntry *entry, UserMapping *user, bool use_minio);
+static bool disconnect_cached_connections(Oid serverid);
 static Aws::S3::S3Client *create_s3_connection(ForeignServer *server, UserMapping *user, bool use_minio);
 static void close_s3_connection(ConnCacheEntry *entry);
 static void check_conn_params(const char **keywords, const char **values, UserMapping *user);
@@ -144,9 +158,13 @@ parquetGetConnection(UserMapping *user, bool use_minio)
 		ctl.entrysize = sizeof(ConnCacheEntry);
 		/* allocate ConnectionHash in the cache context */
 		ctl.hcxt = CacheMemoryContext;
-		ConnectionHash = hash_create("parquet_fdw connections", 8,
+		ConnectionHash = hash_create("parquet_s3_fdw connections", 8,
 									 &ctl,
+#if (PG_VERSION_NUM >= 140000)
+									 HASH_ELEM | HASH_BLOBS);
+#else
 									 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+#endif
 
 		/*
 		 * Register some callback functions that manage connection cleanup.
@@ -180,16 +198,10 @@ parquetGetConnection(UserMapping *user, bool use_minio)
 	 */
 	if (entry->conn != NULL && entry->invalidated)
 	{
-		elog(DEBUG3, "closing handle %p for option changes to take effect",
+		elog(DEBUG3, "parquet_s3_fdw: closing handle %p for option changes to take effect",
 			 entry->conn);
 		close_s3_connection(entry);
 	}
-
-	/*
-	 * We don't check the health of cached connection here, because it would
-	 * require some overhead.  Broken connection will be detected when the
-	 * connection is actually used.
-	 */
 
 	/*
 	 * If cache entry doesn't have a connection, we have to establish a new
@@ -197,27 +209,92 @@ parquetGetConnection(UserMapping *user, bool use_minio)
 	 * will remain in a valid empty state, ie conn == NULL.)
 	 */
 	if (entry->conn == NULL)
-	{
-		ForeignServer *server = GetForeignServer(user->serverid);
-
-		/* Reset all transient state fields, to be sure all are clean */
-		entry->have_error = false;
-		entry->invalidated = false;
-		entry->server_hashvalue =
-			GetSysCacheHashValue1(FOREIGNSERVEROID,
-								  ObjectIdGetDatum(server->serverid));
-		entry->mapping_hashvalue =
-			GetSysCacheHashValue1(USERMAPPINGOID,
-								  ObjectIdGetDatum(user->umid));
-
-		/* Now try to make the handle */
-		entry->conn = create_s3_connection(server, user, use_minio);
-
-		elog(DEBUG3, "new parquet_fdw handle %p for server \"%s\" (user mapping oid %u, userid %u)",
-			 entry->conn, server->servername, user->umid, user->userid);
-	}
+		make_new_connection(entry, user, use_minio);
 
 	return entry->conn;
+}
+
+/*
+ * Reset all transient state fields in the cached connection entry and
+ * establish new connection to the remote server.
+ */
+static void
+make_new_connection(ConnCacheEntry *entry, UserMapping *user, bool use_minio)
+{
+	ForeignServer *server = GetForeignServer(user->serverid);
+
+	Assert(entry->conn == NULL);
+
+	/* Reset all transient state fields, to be sure all are clean */
+	entry->invalidated = false;
+	entry->serverid = server->serverid;
+	entry->server_hashvalue =
+		GetSysCacheHashValue1(FOREIGNSERVEROID,
+								ObjectIdGetDatum(server->serverid));
+	entry->mapping_hashvalue =
+		GetSysCacheHashValue1(USERMAPPINGOID,
+								ObjectIdGetDatum(user->umid));
+
+	/* Now try to make the handle */
+	entry->conn = create_s3_connection(server, user, use_minio);
+
+	elog(DEBUG3, "parquet_s3_fdw: new parquet_fdw handle %p for server \"%s\" (user mapping oid %u, userid %u)",
+			entry->conn, server->servername, user->umid, user->userid);
+}
+
+/*
+ * Workhorse to disconnect cached connections.
+ *
+ * This function scans all the connection cache entries and disconnects
+ * the open connections whose foreign server OID matches with
+ * the specified one. If InvalidOid is specified, it disconnects all
+ * the cached connections.
+ *
+ * This function emits a warning for each connection that's used in
+ * the current transaction and doesn't close it. It returns true if
+ * it disconnects at least one connection, otherwise false.
+ *
+ * Note that this function disconnects even the connections that are
+ * established by other users in the same local session using different
+ * user mappings. This leads even non-superuser to be able to close
+ * the connections established by superusers in the same local session.
+ *
+ * XXX As of now we don't see any security risk doing this. But we should
+ * set some restrictions on that, for example, prevent non-superuser
+ * from closing the connections established by superusers even
+ * in the same session?
+ */
+static bool
+disconnect_cached_connections(Oid serverid)
+{
+	HASH_SEQ_STATUS scan;
+	ConnCacheEntry *entry;
+	bool		all = !OidIsValid(serverid);
+	bool		result = false;
+
+	/*
+	 * Connection cache hashtable has not been initialized yet in this
+	 * session, so return false.
+	 */
+	if (!ConnectionHash)
+		return false;
+
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		/* Ignore cache entry if no open connection right now. */
+		if (!entry->conn)
+			continue;
+
+		if (all || entry->serverid == serverid)
+		{
+			elog(DEBUG3, "parquet_s3_fdw: discarding connection %p", entry->conn);
+			close_s3_connection(entry);
+			result = true;
+		}
+	}
+
+	return result;
 }
 
 /*
@@ -290,7 +367,7 @@ create_s3_connection(ForeignServer *server, UserMapping *user, bool use_minio)
 		if (!conn)
 			ereport(ERROR,
 					(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
-					 errmsg("could not connect to S3 \"%s\"",
+					 errmsg("parquet_s3_fdw: could not connect to S3 \"%s\"",
 							server->servername)));
 
 		pfree(keywords);
@@ -338,8 +415,8 @@ check_conn_params(const char **keywords, const char **values, UserMapping *user)
 
 	ereport(ERROR,
 			(errcode(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
-			 errmsg("password is required"),
-			 errdetail("Non-superusers must provide a password in the user mapping.")));
+			 errmsg("parquet_s3_fdw: password is required"),
+			 errdetail("parquet_s3_fdw: Non-superusers must provide a password in the user mapping.")));
 }
 
 /*
@@ -490,7 +567,7 @@ parquetGetS3ObjectList(Aws::S3::S3Client *s3_cli, const char *s3path)
 	auto outcome = s3_client.ListObjects(request);
 
 	if (!outcome.IsSuccess())
-		elog(ERROR, "parquet_fdw: failed to get object list on %s. %s", bucketName.substr(0, len).c_str(), outcome.GetError().GetMessage().c_str());
+		elog(ERROR, "parquet_s3_fdw: failed to get object list on %s. %s", bucketName.substr(0, len).c_str(), outcome.GetError().GetMessage().c_str());
 
 	Aws::Vector<Aws::S3::Model::Object> objects =
 		outcome.GetResult().GetContents();
@@ -500,7 +577,7 @@ parquetGetS3ObjectList(Aws::S3::S3Client *s3_cli, const char *s3path)
         if (!dir)
         {
 		    objectlist = lappend(objectlist, makeString(pstrdup((char*)key.c_str())));
-            elog(DEBUG1, "parquet_fdw: accessing %s%s", s3path, key.c_str());
+            elog(DEBUG1, "parquet_s3_fdw: accessing %s%s", s3path, key.c_str());
         }
         else if (strncmp(key.c_str(), dir, strlen(dir)) == 0)
         {
@@ -509,16 +586,55 @@ parquetGetS3ObjectList(Aws::S3::S3Client *s3_cli, const char *s3path)
             if (key.at(key.length()-1) != '/' && strcmp(file, "/") != 0)
             {
                 objectlist = lappend(objectlist, makeString(file));
-                elog(DEBUG1, "parquet_fdw: accessing %s%s", s3path, key.substr(strlen(dir)).c_str());
+                elog(DEBUG1, "parquet_s3_fdw: accessing %s%s", s3path, key.substr(strlen(dir)).c_str());
             }
 			else
 				pfree(file);
         }
         else
-            elog(DEBUG1, "parquet_fdw: skipping s3://%s/%s", bucketName.substr(0, len).c_str(), key.c_str());
+            elog(DEBUG1, "parquet_s3_fdw: skipping s3://%s/%s", bucketName.substr(0, len).c_str(), key.c_str());
 	}
 
 	return objectlist;
+}
+
+/*
+ * If the keep_connections option of its server is disabled,
+ * then discard it to recover. Next parquetGetConnection 
+ * will open a new connection.
+ */
+void
+parquet_disconnect_s3_server()
+{
+	HASH_SEQ_STATUS scan;
+	ConnCacheEntry *entry;
+
+	HASH_SEQ_STATUS scan_reader;
+	ReaderCacheEntry *entry_reader;
+
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		/* Ignore cache entry if no open connection right now */
+		if (entry->conn == NULL)
+			continue;
+
+		elog(DEBUG3, "parquet_s3_fdw: discarding connection %p", entry->conn);
+		close_s3_connection(entry);
+	}
+
+	hash_seq_init(&scan_reader, FileReaderHash);
+	while ((entry_reader = (ReaderCacheEntry *) hash_seq_search(&scan_reader)))
+	{
+		/* Ignore cache entry if no open connection right now */
+		if (entry_reader->file_reader == NULL)
+			continue;
+
+		elog(DEBUG3, "parquet_s3_fdw: discarding reader connection %p", entry_reader->file_reader);
+		entry_reader->file_reader->reader.release();
+		delete(entry_reader->file_reader);
+		entry_reader->file_reader = NULL;
+	}
 }
 
 /*
@@ -532,13 +648,13 @@ parquetFilenamesValidator(const char *filename, FileLocation loc)
     if (IS_S3_PATH(filename))
     {
         if (loc == LOC_LOCAL)
-            elog(ERROR, "Cannot specify the mix of local file and S3 file");
+            elog(ERROR, "parquet_s3_fdw: Cannot specify the mix of local file and S3 file");
         return LOC_S3;
     }
     else
     {
         if (loc == LOC_S3)
-            elog(ERROR, "Cannot specify the mix of local file and S3 file");
+            elog(ERROR, "parquet_s3_fdw: Cannot specify the mix of local file and S3 file");
         return LOC_LOCAL;
     }
 }
@@ -563,12 +679,13 @@ parquetIsS3Filenames(List *filenames)
  * If foreign table option 'dirname' is specified, dirname starts by 
  * "s3://". And filename is already set by get_filenames_in_dir().
  * On the other hand, if foreign table option 'filename' is specified,
- * dirname is NULL and filename is set as fullpath started by "s3://".
+ * dirname is NULL (Or empty string when ANALYZE was executed)
+ * and filename is set as fullpath started by "s3://".
  */
 void
 parquetSplitS3Path(const char *dirname, const char *filename, char **bucket, char **filepath)
 {
-    if (dirname)
+    if (dirname != NULL && dirname[0] != '\0')
     {
         *bucket = pstrdup(dirname + 5); /* Remove "s3://" */
         Assert (filename);
@@ -598,12 +715,12 @@ parquetGetDirFileList(List *filelist, const char *path)
 
     ret = stat(path, &st);
     if (ret != 0)
-        elog(ERROR, "parquet_fdw: cannot stat %s", path);
+        elog(ERROR, "parquet_s3_fdw: cannot stat %s", path);
     
     if ((st.st_mode & S_IFMT) == S_IFREG)
     {
         filelist = lappend(filelist, makeString(pstrdup(path)));
-        elog(DEBUG1, "parquet_fdw: file = %s", path);
+        elog(DEBUG1, "parquet_s3_fdw: file = %s", path);
         return filelist;
     }
 
@@ -613,7 +730,7 @@ parquetGetDirFileList(List *filelist, const char *path)
 
     dp = opendir(path);
     if (!dp)
-        elog(ERROR, "parquet_fdw: cannot open %s", path);
+        elog(ERROR, "parquet_s3_fdw: cannot open %s", path);
 
     entry = readdir(dp);
     while (entry != NULL) {
@@ -709,7 +826,7 @@ parquetImportForeignSchemaS3(ImportForeignSchemaStmt *stmt, Oid serverOid)
                                            stmt->server_name, &fullpath, 1,
                                            fields, stmt->options);
         cmds = lappend(cmds, query);
-        elog(DEBUG1, "parquet_fdw: %s", query);
+        elog(DEBUG1, "parquet_s3_fdw: %s", query);
     }
 
     return cmds;
@@ -761,9 +878,13 @@ parquetGetFileReader(Aws::S3::S3Client *s3client, char *dname, char *fname)
 		ctl.entrysize = sizeof(ReaderCacheEntry);
 		/* allocate ConnectionHash in the cache context */
 		ctl.hcxt = CacheMemoryContext;
-		FileReaderHash = hash_create("parquet_fdw file reader cache", 8,
+		FileReaderHash = hash_create("parquet_s3_fdw file reader cache", 8,
 									 &ctl,
+#if (PG_VERSION_NUM >= 140000)
+									 HASH_ELEM | HASH_BLOBS);
+#else
 									 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+#endif
 
 		/*
 		 * Register some callback functions that manage connection cleanup.
@@ -810,10 +931,175 @@ parquetGetFileReader(Aws::S3::S3Client *s3client, char *dname, char *fname)
 		if (!entry->file_reader)
 			entry->file_reader = new FileReaderCache();
 		entry->file_reader->reader = std::move(reader);
-		elog(DEBUG3, "new parquet file reader for s3handle %p %s/%s",
+		elog(DEBUG3, "parquet_s3_fdw: new parquet file reader for s3handle %p %s/%s",
 			 s3client, dname, fname);
 	}
 
 	return entry;
 }
 
+/*
+ * List active foreign server connections.
+ *
+ * This function takes no input parameter and returns setof record made of
+ * following values:
+ * - server_name - server name of active connection. In case the foreign server
+ *   is dropped but still the connection is active, then the server name will
+ *   be NULL in output.
+ * - valid - true/false representing whether the connection is valid or not.
+ *
+ * No records are returned when there are no cached connections at all.
+ */
+extern "C"
+{
+Datum
+parquet_s3_fdw_get_connections(PG_FUNCTION_ARGS)
+{
+#define PARQUET_S3_FDW_GET_CONNECTIONS_COLS	2
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	HASH_SEQ_STATUS scan;
+	ConnCacheEntry *entry;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("parquet_s3_fdw: set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("parquet_s3_fdw: materialize mode required, but it is not allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "parquet_s3_fdw: return type must be a row type");
+
+	/* Build tuplestore to hold the result rows */
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	/* If cache doesn't exist, we return no records */
+	if (!ConnectionHash)
+	{
+		/* clean up and return the tuplestore */
+		tuplestore_donestoring(tupstore);
+
+		PG_RETURN_VOID();
+	}
+
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		ForeignServer	*server;
+		Datum			values[PARQUET_S3_FDW_GET_CONNECTIONS_COLS];
+		bool			nulls[PARQUET_S3_FDW_GET_CONNECTIONS_COLS];
+
+		/* We only look for open remote connections */
+		if (!entry->conn)
+			continue;
+
+		server = GetForeignServerExtended(entry->serverid, FSV_MISSING_OK);
+
+		MemSet(values, 0, sizeof(values));
+		MemSet(nulls, 0, sizeof(nulls));
+
+		/*
+		 * The foreign server may have been dropped in current explicit
+		 * transaction. It is not possible to drop the server from another
+		 * session when the connection associated with it is in use in the
+		 * current transaction, if tried so, the drop query in another session
+		 * blocks until the current transaction finishes.
+		 *
+		 * Even though the server is dropped in the current transaction, the
+		 * cache can still have associated active connection entry, say we
+		 * call such connections dangling. Since we can not fetch the server
+		 * name from system catalogs for dangling connections, instead we show
+		 * NULL value for server name in output.
+		 *
+		 * We could have done better by storing the server name in the cache
+		 * entry instead of server oid so that it could be used in the output.
+		 * But the server name in each cache entry requires 64 bytes of
+		 * memory, which is huge, when there are many cached connections and
+		 * the use case i.e. dropping the foreign server within the explicit
+		 * current transaction seems rare. So, we chose to show NULL value for
+		 * server name in output.
+		 */
+		if (!server)
+		{
+			/*
+			 * If the server has been dropped in the current explicit
+			 * transaction, then this entry would have been invalidated in
+			 * parquet_fdw_inval_callback at the end of drop server command.
+			 * Note that this connection would not have been closed in
+			 * parquet_fdw_inval_callback because it is still being used in
+			 * the current explicit transaction. So, assert that here.
+			 */
+			Assert(entry->conn && entry->invalidated);
+
+			/* Show null, if no server name was found */
+			nulls[0] = true;
+		}
+		else
+			values[0] = CStringGetTextDatum(server->servername);
+
+		values[1] = BoolGetDatum(!entry->invalidated);
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
+
+	PG_RETURN_VOID();
+}
+
+/*
+ * Disconnect the specified cached connections.
+ *
+ * This function discards the open connections that are established by
+ * parquet_s3_fdw from the local session to the foreign server with
+ * the given name. Note that there can be multiple connections to
+ * the given server using different user mappings. If the connections
+ * are used in the current local transaction, they are not disconnected
+ * and warning messages are reported. This function returns true
+ * if it disconnects at least one connection, otherwise false. If no
+ * foreign server with the given name is found, an error is reported.
+ */
+Datum
+parquet_s3_fdw_disconnect(PG_FUNCTION_ARGS)
+{
+	ForeignServer	*server;
+	char			*servername;
+
+	servername = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	server = GetForeignServerByName(servername, false);
+
+	PG_RETURN_BOOL(disconnect_cached_connections(server->serverid));
+}
+
+/*
+ * Disconnect all the cached connections.
+ *
+ * This function discards all the open connections that are established by
+ * parquet_s3_fdw from the local session to the foreign servers.
+ * If the connections are used in the current local transaction, they are
+ * not disconnected and warning messages are reported. This function
+ * returns true if it disconnects at least one connection, otherwise false.
+ */
+Datum
+parquet_s3_fdw_disconnect_all(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_BOOL(disconnect_cached_connections(InvalidOid));
+}
+}

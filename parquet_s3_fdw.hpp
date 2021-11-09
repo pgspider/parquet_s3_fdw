@@ -3,7 +3,7 @@
  * parquet_s3_fdw.hpp
  *		  Header file of accessing S3 module for parquet_s3_fdw
  *
- * Portions Copyright (c) 2020, TOSHIBA CORPORATION
+ * Portions Copyright (c) 2021, TOSHIBA CORPORATION
  *
  * IDENTIFICATION
  *		  contrib/parquet_s3_fdw/parquet_s3_fdw.hpp
@@ -15,6 +15,7 @@
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
+#include "arrow/api.h"
 #include <parquet/arrow/reader.h>
 
 extern "C"
@@ -93,6 +94,7 @@ extern bool parquetIsS3Filenames(List *filenames);
 extern List *parquetImportForeignSchemaS3(ImportForeignSchemaStmt *stmt, Oid serverOid);
 extern List *parquetExtractParquetFields(List *fields, char **paths, const char *servername) noexcept;
 extern ReaderCacheEntry *parquetGetFileReader(Aws::S3::S3Client *s3client, char *dname, char *fname);
+extern void parquet_disconnect_s3_server();
 
 #define IS_S3_PATH(str) (str != NULL && strncmp(str, "s3://", 5) == 0)
 
