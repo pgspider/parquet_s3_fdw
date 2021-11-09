@@ -3,13 +3,12 @@
 This PostgreSQL extension is a Foreign Data Wrapper (FDW) for accessing Parquet file on local file system and [Amazon S3][2].
 This version of parquet_s3_fdw can work for PostgreSQL 13.
 
-Parquet foreign data wrapper supporting S3 access for PostgreSQL.
+Read-only Apache Parquet foreign data wrapper supporting S3 access for PostgreSQL.
 
-This code is based on [`parquet_fdw`][1]created by adjust GmbH.
 
 ## Installation
 ### 1. Install dependent libraries
-`parquet_s3_fdw` requires `libarrow` and `libparquet` installed in your system (requires version 0.15, for previous versions use branch [arrow-0.14](https://github.com/adjust/parquet_fdw/tree/arrow-0.14)). Please refer to [building guide](https://github.com/apache/arrow/blob/master/cpp/README.md).
+`parquet_s3_fdw` requires `libarrow` and `libparquet` installed in your system (requires version 0.15+, for previous versions use branch [arrow-0.14](https://github.com/adjust/parquet_fdw/tree/arrow-0.14)). Please refer to [building guide](https://github.com/apache/arrow/blob/master/docs/source/developers/cpp/building.rst).
 
 `AWS SDK for C++ (libaws-cpp-sdk-core libaws-cpp-sdk-s3)` is also required (Confirmed version is 1.8.14).
 
@@ -51,8 +50,9 @@ CREATE USER MAPPING FOR public SERVER parquet_s3_srv OPTIONS (user 's3user', pas
 ### Create foreign table
 Now you should be able to create foreign table from Parquet files. Currently `parquet_s3_fdw` supports the following column [types](https://github.com/apache/arrow/blob/master/cpp/src/arrow/type.h) (to be extended shortly):
 
-| Parquet type |  SQL type |
-|--------------|-----------|
+|   Arrow type |  SQL type |
+|-------------:|----------:|
+|        INT16 |      INT2 |
 |        INT32 |      INT4 |
 |        INT64 |      INT8 |
 |        FLOAT |    FLOAT4 |
@@ -62,6 +62,7 @@ Now you should be able to create foreign table from Parquet files. Currently `pa
 |       STRING |      TEXT |
 |       BINARY |     BYTEA |
 |         LIST |     ARRAY |
+|          MAP |     JSONB |
 
 Currently `parquet_s3_fdw` doesn't support structs and nested lists.
 
@@ -70,7 +71,19 @@ Following options are supported:
 * **dirname** - path to directory having Parquet files to read;
 * **sorted** - space separated list of columns that Parquet files are presorted by; that would help postgres to avoid redundant sorting when running query with `ORDER BY` clause or in other cases when having a presorted set is beneficial (Group Aggregate, Merge Join);
 * **use_mmap** - whether memory map operations will be used instead of file read operations (default `false`);
-* **use_threads** - enables `arrow`'s parallel columns decoding/decompression (default `false`).
+* **use_threads** - enables Apache Arrow's parallel columns decoding/decompression (default `false`);
+* **files_func** - user defined function that is used by parquet_s3_fdw to retrieve the list of parquet files on each query; function must take one `JSONB` argument and return text array of full paths to parquet files;
+* **files_func_arg** - argument for the function, specified by **files_func**.
+* **max_open_files** - the limit for the number of Parquet files open simultaneously.
+
+Foreign table may be created for a single Parquet file and for a set of files. It is also possible to specify a user defined function, which would return a list of file paths. Depending on the number of files and table options `parquet_s3_fdw` may use one of the following execution strategies:
+
+| Strategy                | Description              |
+|-------------------------|--------------------------|
+| **Single File**         | Basic single file reader
+| **Multifile**           | Reader which process Parquet files one by one in sequential manner |
+| **Multifile Merge**     | Reader which merges presorted Parquet files so that the produced result is also ordered; used when `sorted` option is specified and the query plan implies ordering (e.g. contains `ORDER BY` clause) |
+| **Caching Multifile Merge** | Same as `Multifile Merge`, but keeps the number of simultaneously open files limited; used when the number of specified Parquet files exceeds `max_open_files` |
 
 GUC variables:
 * **parquet_fdw.use_threads** - global switch that allow user to enable or disable threads (default `true`).
@@ -94,7 +107,7 @@ SELECT * FROM userdata;
 ```
 
 ## Parallel queries
-`parquet_s3_fdw` also supports [parallel query execution](https://www.postgresql.org/docs/current/parallel-query.html) (not to confuse with multi-threaded decoding feature of `arrow`). It is disabled by default; to enable it run `ANALYZE` command on the table. The reason behind this is that without statistics postgres may end up choosing a terrible parallel plan for certain queries which would be much worse than a serial one (e.g. grouping by a column with large number of distinct values).
+`parquet_s3_fdw` also supports [parallel query execution](https://www.postgresql.org/docs/current/parallel-query.html) (not to confuse with multi-threaded decoding feature of Apache Arrow). It is disabled by default; to enable it run `ANALYZE` command on the table. The reason behind this is that without statistics postgres may end up choosing a terrible parallel plan for certain queries which would be much worse than a serial one (e.g. grouping by a column with large number of distinct values).
 
 ## Import
 `parquet_s3_fdw` also supports [`IMPORT FOREIGN SCHEMA`](https://www.postgresql.org/docs/current/sql-importforeignschema.html) command to discover parquet files in the specified directory on filesystem and create foreign tables according to those files. It can be used as follows:
@@ -160,12 +173,25 @@ SELECT import_parquet_s3_explicit(
 ## Features
 - Support SELECT of parquet file on local file system or Amazon S3.
 - Support MinIO access instead of Amazon S3.
+- Allow control over whether foreign servers keep connections open after transaction completion. This is controlled by keep_connections and defaults to on.
+- Support parquet_s3_fdw function parquet_s3_fdw_get_connections() to report open foreign server connections.
 
 ## Limitations
 - Modification (INSERT, UPDATE and DELETE) is not supported.
 - Transaction is not supported.
 - Cannot create a single foreign table using parquet files on both file system and Amazon S3.
 - AWS region is hard-coded as "ap-northeast-1". If you want to use another region, you need to modify the source code by changing "AP_NORTHEAST_1" in parquet_s3_fdw_connection.cpp.
+- For the query that return record type, parquet s3 fdw only fills data for columns which are refered in target list or clause. For other columns, they are filled as NULL.     
+Example:    
+    ```sql
+    -- column c1 and c3 are refered in ORDER BY clause, so it will be filled with values. For other columns: c2,c4,c5,c6 filled as NULL.
+    SELECT t1 FROM tbl t1 ORDER BY tbl.c3, tbl.c1;     
+            t1              
+    ------------------      
+     (101,,00101,,,,)       
+     (102,,00102,,,,)       
+    (2 rows) 
+    ```  
 
 ## Contributing
 Opening issues and pull requests on GitHub are welcome.

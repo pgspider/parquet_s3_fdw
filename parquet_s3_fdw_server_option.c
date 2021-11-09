@@ -3,7 +3,7 @@
  * parquet_s3_fdw_server_option.c
  *		  Server option management for parquet_s3_fdw
  *
- * Portions Copyright (c) 2020, TOSHIBA CORPORATION
+ * Portions Copyright (c) 2021, TOSHIBA CORPORATION
  *
  * IDENTIFICATION
  *		  contrib/parquet_s3_fdw/parquet_s3_fdw_server_option.c
@@ -45,6 +45,10 @@ static ParquetS3FdwServerOption parquet_s3_server_options[] =
 	{
 		SERVER_OPTION_USE_MINIO, ForeignServerRelationId
 	},
+	/* Keep Connections options */
+	{
+		SERVER_OPTION_KEEP_CONNECTIONS, ForeignServerRelationId
+	},
 	/* Sentinel */
 	{
 		NULL, InvalidOid
@@ -59,21 +63,20 @@ parquet_s3_is_valid_server_option(DefElem *def)
 {
 	struct ParquetS3FdwServerOption *opt;
 
-	for (opt = parquet_s3_server_options; opt->optname; opt++)
+	if (strcmp(def->defname, SERVER_OPTION_USE_MINIO) == 0 ||
+		strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0)
 	{
-        if (strcmp(def->defname, SERVER_OPTION_USE_MINIO) == 0)
-        {
-            /* Check that bool value is valid */
-            bool    use_minio;
+		/* Check that bool value is valid */
+		bool	check_bool_valid;
 
-            if (!parse_bool(defGetString(def), &use_minio))
-                ereport(ERROR,
-                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                         errmsg("invalid value for boolean option \"%s\": %s",
-                                def->defname, defGetString(def))));
-            return true;
-        }
+		if (!parse_bool(defGetString(def), &check_bool_valid))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("parquet_s3_fdw: invalid value for boolean option \"%s\": %s",
+							def->defname, defGetString(def))));
+		return true;
 	}
+
 	return false;
 }
 
@@ -92,6 +95,8 @@ extract_options(List *options, parquet_s3_server_opt *opt)
 
 		if (strcmp(def->defname, SERVER_OPTION_USE_MINIO) == 0)
 			opt->use_minio = defGetBoolean(def);
+		else if (strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0)
+			opt->keep_connections = defGetBoolean(def);
 	}
 }
 
@@ -113,6 +118,8 @@ parquet_s3_get_options(Oid foreignoid)
 
 	/* Set default value. */
 	opt->use_minio = false;
+	/* By default, all the connections to any foreign servers are kept open. */
+	opt->keep_connections = true;
 
 	/*
 	 * Extract options from FDW objects.
@@ -158,6 +165,8 @@ parquet_s3_get_server_options(Oid serverid)
 
 	/* Set default value. */
 	opt->use_minio = false;
+	/* By default, all the connections to any foreign servers are kept open. */
+	opt->keep_connections = true;
 
 	/* Get server options. */
 	f_server = GetForeignServer(serverid);
