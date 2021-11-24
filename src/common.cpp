@@ -131,7 +131,7 @@ bytes_to_postgres_type(const char *bytes, arrow::DataType *arrow_type)
 arrow::Type::type
 get_arrow_list_elem_type(arrow::DataType *type)
 {
-    auto children = type->children();
+    auto children = type->fields();
 
     Assert(children.size() == 1);
     return children[0]->type()->id();
