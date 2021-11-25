@@ -659,7 +659,7 @@ extract_parquet_fields(const char *path, const char *dirname, Aws::S3::S3Client 
                     Oid     pg_subtype;
                     bool    error = false;
 
-                    if (type->children().size() != 1)
+                    if (type->fields().size() != 1)
                         throw std::runtime_error("lists of structs are not supported");
 
                     subtype_id = get_arrow_list_elem_type(type.get());
