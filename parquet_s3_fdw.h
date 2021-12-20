@@ -36,17 +36,17 @@
 #define parquet_fdw_use_threads parquet_s3_fdw_use_threads
 
 #define SingleFileExecutionState SingleFileExecutionStateS3
-#define CODE_VERSION 200
+#define CODE_VERSION 201
 
 /* Structure to store option information. */
 typedef struct parquet_s3_server_opt
 {
-	bool		use_minio;	/* Connect to MinIO instead of Amazon S3. */
+	bool		use_minio;		/* Connect to MinIO instead of Amazon S3. */
 	bool		keep_connections;	/* setting value of keep_connections
-									* server option */
+									 * server option */
 }			parquet_s3_server_opt;
 
-bool parquet_s3_is_valid_server_option(DefElem *def);
+bool		parquet_s3_is_valid_server_option(DefElem *def);
 parquet_s3_server_opt *parquet_s3_get_options(Oid foreignoid);
 parquet_s3_server_opt *parquet_s3_get_server_options(Oid serverid);
 
@@ -54,5 +54,4 @@ parquet_s3_server_opt *parquet_s3_get_server_options(Oid serverid);
 #define SERVER_OPTION_USE_MINIO "use_minio"
 #define SERVER_OPTION_KEEP_CONNECTIONS "keep_connections"
 
-#endif /* __PARQUET_S3_FDW_H__ */
-
+#endif							/* __PARQUET_S3_FDW_H__ */

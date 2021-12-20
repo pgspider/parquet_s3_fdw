@@ -573,14 +573,14 @@ EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1, t2.c2, t3.c3 FROM ft2 t1 LEFT JOIN ft2 t2 ON (t1.c1 = t2.c1) FULL JOIN ft4 t3 ON (t2.c1 = t3.c1) OFFSET 10 LIMIT 10;
 --Testcase 127:
 SELECT t1.c1, t2.c2, t3.c3 FROM ft2 t1 LEFT JOIN ft2 t2 ON (t1.c1 = t2.c1) FULL JOIN ft4 t3 ON (t2.c1 = t3.c1) OFFSET 10 LIMIT 10;
-SET enable_resultcache TO off;
+SET enable_memoize TO off;
 -- right outer join + left outer join
 --Testcase 128:
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1, t2.c2, t3.c3 FROM ft2 t1 RIGHT JOIN ft2 t2 ON (t1.c1 = t2.c1) LEFT JOIN ft4 t3 ON (t2.c1 = t3.c1) OFFSET 10 LIMIT 10;
 --Testcase 129:
 SELECT t1.c1, t2.c2, t3.c3 FROM ft2 t1 RIGHT JOIN ft2 t2 ON (t1.c1 = t2.c1) LEFT JOIN ft4 t3 ON (t2.c1 = t3.c1) OFFSET 10 LIMIT 10;
-RESET enable_resultcache;
+RESET enable_memoize;
 -- left outer join + right outer join
 --Testcase 130:
 EXPLAIN (VERBOSE, COSTS OFF)
@@ -1428,9 +1428,11 @@ DROP FOREIGN TABLE reindex_foreign;
 -- conversion error
 -- ===================================================================
 -- ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 TYPE int;
--- SELECT * FROM ft1 WHERE c1 = 1;  -- ERROR
--- SELECT  ft1.c1,  ft2.c2, ft1.c8 FROM ft1, ft2 WHERE ft1.c1 = ft2.c1 AND ft1.c1 = 1; -- ERROR
--- SELECT  ft1.c1,  ft2.c2, ft1 FROM ft1, ft2 WHERE ft1.c1 = ft2.c1 AND ft1.c1 = 1; -- ERROR
+-- SELECT * FROM ft1 ftx(x1,x2,x3,x4,x5,x6,x7,x8) WHERE x1 = 1;  -- ERROR
+-- SELECT ftx.x1, ft2.c2, ftx.x8 FROM ft1 ftx(x1,x2,x3,x4,x5,x6,x7,x8), ft2
+--   WHERE ftx.x1 = ft2.c1 AND ftx.x1 = 1; -- ERROR
+-- SELECT ftx.x1, ft2.c2, ftx FROM ft1 ftx(x1,x2,x3,x4,x5,x6,x7,x8), ft2
+--   WHERE ftx.x1 = ft2.c1 AND ftx.x1 = 1; -- ERROR
 -- SELECT sum(c2), array_agg(c8) FROM ft1 GROUP BY c8; -- ERROR
 -- ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 TYPE text;
 
@@ -1848,16 +1850,42 @@ DROP FUNCTION row_before_insupd_trigfunc;
 -- ===================================================================
 -- test generated columns
 -- ===================================================================
--- create table gloc1 (a int, b int);
+-- create table gloc1 (
+--   a int,
+--   b int generated always as (a * 2) stored);
 -- alter table gloc1 set (autovacuum_enabled = 'false');
 -- create foreign table grem1 (
 --   a int,
 --   b int generated always as (a * 2) stored)
 --   server loopback options(table_name 'gloc1');
+-- explain (verbose, costs off)
 -- insert into grem1 (a) values (1), (2);
+-- insert into grem1 (a) values (1), (2);
+-- explain (verbose, costs off)
+-- update grem1 set a = 22 where a = 2;
 -- update grem1 set a = 22 where a = 2;
 -- select * from gloc1;
 -- select * from grem1;
+-- delete from grem1;
+
+-- -- test copy from
+-- copy grem1 from stdin;
+-- 1
+-- 2
+-- \.
+-- select * from gloc1;
+-- select * from grem1;
+-- delete from grem1;
+
+-- -- test batch insert
+-- alter server loopback options (add batch_size '10');
+-- explain (verbose, costs off)
+-- insert into grem1 (a) values (1), (2);
+-- insert into grem1 (a) values (1), (2);
+-- select * from gloc1;
+-- select * from grem1;
+-- delete from grem1;
+-- alter server loopback options (drop batch_size);
 
 -- ===================================================================
 -- test local triggers
@@ -2104,6 +2132,10 @@ DROP FUNCTION row_before_insupd_trigfunc;
 
 
 -- -- Test direct foreign table modification functionality
+-- EXPLAIN (verbose, costs off)
+-- DELETE FROM rem1;                 -- can be pushed down
+-- EXPLAIN (verbose, costs off)
+-- DELETE FROM rem1 WHERE false;     -- currently can't be pushed down
 
 -- -- Test with statement-level triggers
 -- CREATE TRIGGER trig_stmt_before
@@ -2874,7 +2906,7 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS 
 -- \d import_dest2.*
 -- CREATE SCHEMA import_dest3;
 -- IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest3
---   OPTIONS (import_collate 'false', import_not_null 'false');
+--   OPTIONS (import_collate 'false', import_generated 'false', import_not_null 'false');
 -- \det+ import_dest3.*
 -- \d import_dest3.*
 
@@ -3102,7 +3134,7 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS 
 -- 	c8 user_enum
 -- ) SERVER loopback_nopw OPTIONS (schema_name 'public', table_name 'ft1');
 
--- SELECT * FROM ft1_nopw LIMIT 1;
+-- SELECT 1 FROM ft1_nopw LIMIT 1;
 
 -- If we add a password to the connstr it'll fail, because we don't allow passwords
 -- in connstrs only in user mappings.
@@ -3120,13 +3152,13 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS 
 
 -- ALTER USER MAPPING FOR CURRENT_USER SERVER loopback_nopw OPTIONS (ADD password 'dummypw');
 
--- SELECT * FROM ft1_nopw LIMIT 1;
+-- SELECT 1 FROM ft1_nopw LIMIT 1;
 
 -- Unpriv user cannot make the mapping passwordless
 -- ALTER USER MAPPING FOR CURRENT_USER SERVER loopback_nopw OPTIONS (ADD password_required 'false');
 
 
--- SELECT * FROM ft1_nopw LIMIT 1;
+-- SELECT 1 FROM ft1_nopw LIMIT 1;
 
 -- RESET ROLE;
 
@@ -3136,7 +3168,7 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS 
 -- SET ROLE regress_nosuper;
 
 -- Should finally work now
--- SELECT * FROM ft1_nopw LIMIT 1;
+-- SELECT 1 FROM ft1_nopw LIMIT 1;
 
 -- unpriv user also cannot set sslcert / sslkey on the user mapping
 -- first set password_required so we see the right error messages
@@ -3181,11 +3213,11 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS 
 -- so that we can easily terminate the connection later.
 -- ALTER SERVER parquet_s3_srv OPTIONS (application_name 'fdw_retry_check');
 
--- If debug_invalidate_system_caches_always is active, it results in
+-- If debug_discard_caches is active, it results in
 -- dropping remote connections after every transaction, making it
 -- impossible to test termination meaningfully.  So turn that off
 -- for this test.
--- SET debug_invalidate_system_caches_always = 0;
+-- SET debug_discard_caches = 0;
 
 -- Make sure we have a remote connection.
 -- SELECT 1 FROM ft1 LIMIT 1;
@@ -3211,7 +3243,7 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS 
 -- \set VERBOSITY default
 -- COMMIT;
 
--- RESET debug_invalidate_system_caches_always;
+-- RESET debug_discard_caches;
 -- =============================================================================
 -- test connection invalidation cases and parquet_s3_fdw_get_connections function
 -- with local parquet file (not on minio/s3 servers). It haven't server and connection.
@@ -3660,6 +3692,16 @@ ALTER SERVER parquet_s3_srv OPTIONS (SET keep_connections 'on');
 -- SELECT * FROM async_pt t1, async_p2 t2 WHERE t1.a = t2.a AND t1.b === 505;
 -- SELECT * FROM async_pt t1, async_p2 t2 WHERE t1.a = t2.a AND t1.b === 505;
 
+-- CREATE TABLE local_tbl (a int, b int, c text);
+-- INSERT INTO local_tbl VALUES (1505, 505, 'foo');
+-- ANALYZE local_tbl;
+
+-- EXPLAIN (VERBOSE, COSTS OFF)
+-- SELECT * FROM local_tbl t1 LEFT JOIN (SELECT *, (SELECT count(*) FROM async_pt WHERE a < 3000) FROM async_pt WHERE a < 3000) t2 ON t1.a = t2.a;
+-- EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+-- SELECT * FROM local_tbl t1 LEFT JOIN (SELECT *, (SELECT count(*) FROM async_pt WHERE a < 3000) FROM async_pt WHERE a < 3000) t2 ON t1.a = t2.a;
+-- SELECT * FROM local_tbl t1 LEFT JOIN (SELECT *, (SELECT count(*) FROM async_pt WHERE a < 3000) FROM async_pt WHERE a < 3000) t2 ON t1.a = t2.a;
+
 -- EXPLAIN (VERBOSE, COSTS OFF)
 -- SELECT * FROM async_pt t1 WHERE t1.b === 505 LIMIT 1;
 -- EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
@@ -3667,8 +3709,6 @@ ALTER SERVER parquet_s3_srv OPTIONS (SET keep_connections 'on');
 -- SELECT * FROM async_pt t1 WHERE t1.b === 505 LIMIT 1;
 
 -- Check with foreign modify
--- CREATE TABLE local_tbl (a int, b int, c text);
--- INSERT INTO local_tbl VALUES (1505, 505, 'foo');
 
 -- CREATE TABLE base_tbl3 (a int, b int, c text);
 -- CREATE FOREIGN TABLE remote_tbl (a int, b int, c text)
@@ -3729,6 +3769,22 @@ ALTER SERVER parquet_s3_srv OPTIONS (SET keep_connections 'on');
 
 -- ALTER SERVER loopback OPTIONS (DROP async_capable);
 -- ALTER SERVER loopback2 OPTIONS (DROP async_capable);
+
+-- ===================================================================
+-- test invalid server and foreign table options
+-- ===================================================================
+-- Invalid fdw_startup_cost option
+-- CREATE SERVER inv_scst FOREIGN DATA WRAPPER postgres_fdw
+-- 	OPTIONS(fdw_startup_cost '100$%$#$#');
+-- -- Invalid fdw_tuple_cost option
+-- CREATE SERVER inv_scst FOREIGN DATA WRAPPER postgres_fdw
+-- 	OPTIONS(fdw_tuple_cost '100$%$#$#');
+-- -- Invalid fetch_size option
+-- CREATE FOREIGN TABLE inv_fsz (c1 int )
+-- 	SERVER loopback OPTIONS (fetch_size '100$%$#$#');
+-- -- Invalid batch_size option
+-- CREATE FOREIGN TABLE inv_bsz (c1 int )
+-- 	SERVER loopback OPTIONS (batch_size '100$%$#$#');
 
 -- Clean-up
 SET client_min_messages TO WARNING;
