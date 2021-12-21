@@ -172,21 +172,15 @@ SELECT c3, c5 FROM ft1 ORDER BY c3, c1 LIMIT 1;  -- should work
 (1 row)
 
 ALTER SERVER parquet_s3_srv OPTIONS (SET use_minio 'false');
-psql:sql/14beta2/parquet_s3_fdw_post.sql:188: ERROR:  option "use_minio" not found
 --Testcase 17:
 SELECT c3, c5 FROM ft1 ORDER BY c3, c1 LIMIT 1;  -- should fail if only when we use minio/s3. With local file, option use_minio is useless.
-  c3   |            c5            
--------+--------------------------
- 00001 | Fri Jan 02 00:00:00 1970
-(1 row)
-
+psql:sql/13.4/parquet_s3_fdw_post.sql:190: ERROR:  parquet_s3_fdw: failed to open Parquet file HeadObject failed
 DO $d$
     BEGIN
         EXECUTE $$ALTER SERVER parquet_s3_srv
             OPTIONS (SET use_minio 'true')$$;
     END;
 $d$;
-psql:sql/14beta2/parquet_s3_fdw_post.sql:196: ERROR:  option "use_minio" not found
 --Testcase 18:
 SELECT c3, c5 FROM ft1 ORDER BY c3, c1 LIMIT 1;  -- should work again
   c3   |            c5            
@@ -197,17 +191,11 @@ SELECT c3, c5 FROM ft1 ORDER BY c3, c1 LIMIT 1;  -- should work again
 -- Test that alteration of user mapping options causes reconnection
 ALTER USER MAPPING FOR CURRENT_USER SERVER parquet_s3_srv
   OPTIONS (SET user 'no such user');
-psql:sql/14beta2/parquet_s3_fdw_post.sql:202: ERROR:  option "user" not found
 --Testcase 19:
 SELECT c3, c5 FROM ft1 ORDER BY c3, c1 LIMIT 1;  -- should fail if only when we use minio/s3. With local file, option user is useless.
-  c3   |            c5            
--------+--------------------------
- 00001 | Fri Jan 02 00:00:00 1970
-(1 row)
-
+psql:sql/13.4/parquet_s3_fdw_post.sql:204: ERROR:  parquet_s3_fdw: failed to open Parquet file HeadObject failed
 ALTER USER MAPPING FOR CURRENT_USER SERVER parquet_s3_srv
   OPTIONS (SET user 'minioadmin');
-psql:sql/14beta2/parquet_s3_fdw_post.sql:206: ERROR:  option "user" not found
 --Testcase 20:
 SELECT c3, c5 FROM ft1 ORDER BY c3, c1 LIMIT 1;  -- should work again
   c3   |            c5            
@@ -2145,7 +2133,8 @@ SELECT t1.c1, t2.c2, t3.c3 FROM ft2 t1 LEFT JOIN ft2 t2 ON (t1.c1 = t2.c1) FULL 
  20 |  0 | AAA020
 (10 rows)
 
-SET enable_resultcache TO off;
+SET enable_memoize TO off;
+psql:sql/13.4/parquet_s3_fdw_post.sql:576: ERROR:  unrecognized configuration parameter "enable_memoize"
 -- right outer join + left outer join
 --Testcase 128:
 EXPLAIN (VERBOSE, COSTS OFF)
@@ -2194,7 +2183,8 @@ SELECT t1.c1, t2.c2, t3.c3 FROM ft2 t1 RIGHT JOIN ft2 t2 ON (t1.c1 = t2.c1) LEFT
  20 |  0 | AAA020
 (10 rows)
 
-RESET enable_resultcache;
+RESET enable_memoize;
+psql:sql/13.4/parquet_s3_fdw_post.sql:583: ERROR:  unrecognized configuration parameter "enable_memoize"
 -- left outer join + right outer join
 --Testcase 130:
 EXPLAIN (VERBOSE, COSTS OFF)
@@ -5431,14 +5421,12 @@ DROP FUNCTION f_test(int);
 --Testcase 341:
 CREATE FOREIGN TABLE reindex_foreign (c1 int, c2 int)
   SERVER parquet_s3_srv_2 OPTIONS (filename :'var', sorted 'c1');
-psql:sql/14beta2/parquet_s3_fdw_post.sql:1411: ERROR:  parquet_s3_fdw: No such file or directory
 REINDEX TABLE reindex_foreign; -- error
-psql:sql/14beta2/parquet_s3_fdw_post.sql:1412: ERROR:  relation "reindex_foreign" does not exist
+psql:sql/13.4/parquet_s3_fdw_post.sql:1412: ERROR:  "reindex_foreign" is not a table or materialized view
 REINDEX TABLE CONCURRENTLY reindex_foreign; -- error
-psql:sql/14beta2/parquet_s3_fdw_post.sql:1413: ERROR:  relation "reindex_foreign" does not exist
+psql:sql/13.4/parquet_s3_fdw_post.sql:1413: ERROR:  "reindex_foreign" is not a table or materialized view
 --Testcase 342:
 DROP FOREIGN TABLE reindex_foreign;
-psql:sql/14beta2/parquet_s3_fdw_post.sql:1415: ERROR:  foreign table "reindex_foreign" does not exist
 -- partitions and foreign tables
 -- CREATE TABLE reind_fdw_parent (c1 int) PARTITION BY RANGE (c1);
 -- CREATE TABLE reind_fdw_0_10 PARTITION OF reind_fdw_parent
@@ -5453,9 +5441,11 @@ psql:sql/14beta2/parquet_s3_fdw_post.sql:1415: ERROR:  foreign table "reindex_fo
 -- conversion error
 -- ===================================================================
 -- ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 TYPE int;
--- SELECT * FROM ft1 WHERE c1 = 1;  -- ERROR
--- SELECT  ft1.c1,  ft2.c2, ft1.c8 FROM ft1, ft2 WHERE ft1.c1 = ft2.c1 AND ft1.c1 = 1; -- ERROR
--- SELECT  ft1.c1,  ft2.c2, ft1 FROM ft1, ft2 WHERE ft1.c1 = ft2.c1 AND ft1.c1 = 1; -- ERROR
+-- SELECT * FROM ft1 ftx(x1,x2,x3,x4,x5,x6,x7,x8) WHERE x1 = 1;  -- ERROR
+-- SELECT ftx.x1, ft2.c2, ftx.x8 FROM ft1 ftx(x1,x2,x3,x4,x5,x6,x7,x8), ft2
+--   WHERE ftx.x1 = ft2.c1 AND ftx.x1 = 1; -- ERROR
+-- SELECT ftx.x1, ft2.c2, ftx FROM ft1 ftx(x1,x2,x3,x4,x5,x6,x7,x8), ft2
+--   WHERE ftx.x1 = ft2.c1 AND ftx.x1 = 1; -- ERROR
 -- SELECT sum(c2), array_agg(c8) FROM ft1 GROUP BY c8; -- ERROR
 -- ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 TYPE text;
 -- ===================================================================
@@ -6222,7 +6212,7 @@ Options: check_option=cascaded
 -- SELECT * FROM foreign_tbl;
 --Testcase 389:
 DROP FOREIGN TABLE foreign_tbl CASCADE;
-psql:sql/14beta2/parquet_s3_fdw_post.sql:1786: NOTICE:  drop cascades to view rw_view
+psql:sql/13.4/parquet_s3_fdw_post.sql:1788: NOTICE:  drop cascades to view rw_view
 --Testcase 390:
 DROP TRIGGER row_before_insupd_trigger ON base_tbl;
 --Testcase 391:
@@ -6277,7 +6267,7 @@ DROP FOREIGN TABLE foreign_tbl CASCADE;
 DROP TRIGGER row_before_insupd_trigger ON child_tbl;
 --Testcase 400:
 DROP TABLE parent_tbl CASCADE;
-psql:sql/14beta2/parquet_s3_fdw_post.sql:1834: NOTICE:  drop cascades to view rw_view
+psql:sql/13.4/parquet_s3_fdw_post.sql:1836: NOTICE:  drop cascades to view rw_view
 --Testcase 401:
 DROP FUNCTION row_before_insupd_trigfunc;
 -- ===================================================================
@@ -6290,16 +6280,40 @@ DROP FUNCTION row_before_insupd_trigfunc;
 -- ===================================================================
 -- test generated columns
 -- ===================================================================
--- create table gloc1 (a int, b int);
+-- create table gloc1 (
+--   a int,
+--   b int generated always as (a * 2) stored);
 -- alter table gloc1 set (autovacuum_enabled = 'false');
 -- create foreign table grem1 (
 --   a int,
 --   b int generated always as (a * 2) stored)
 --   server loopback options(table_name 'gloc1');
+-- explain (verbose, costs off)
 -- insert into grem1 (a) values (1), (2);
+-- insert into grem1 (a) values (1), (2);
+-- explain (verbose, costs off)
+-- update grem1 set a = 22 where a = 2;
 -- update grem1 set a = 22 where a = 2;
 -- select * from gloc1;
 -- select * from grem1;
+-- delete from grem1;
+-- -- test copy from
+-- copy grem1 from stdin;
+-- 1
+-- 2
+-- \.
+-- select * from gloc1;
+-- select * from grem1;
+-- delete from grem1;
+-- -- test batch insert
+-- alter server loopback options (add batch_size '10');
+-- explain (verbose, costs off)
+-- insert into grem1 (a) values (1), (2);
+-- insert into grem1 (a) values (1), (2);
+-- select * from gloc1;
+-- select * from grem1;
+-- delete from grem1;
+-- alter server loopback options (drop batch_size);
 -- ===================================================================
 -- test local triggers
 -- ===================================================================
@@ -6488,6 +6502,10 @@ DROP FUNCTION row_before_insupd_trigfunc;
 -- DROP TRIGGER trig_row_after ON rem1;
 -- DROP TRIGGER trig_local_before ON loc1;
 -- -- Test direct foreign table modification functionality
+-- EXPLAIN (verbose, costs off)
+-- DELETE FROM rem1;                 -- can be pushed down
+-- EXPLAIN (verbose, costs off)
+-- DELETE FROM rem1 WHERE false;     -- currently can't be pushed down
 -- -- Test with statement-level triggers
 -- CREATE TRIGGER trig_stmt_before
 -- 	BEFORE DELETE OR INSERT OR UPDATE ON rem1
@@ -7105,22 +7123,22 @@ CREATE SCHEMA import_dest1;
 IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS (sorted 'c1');
 --Testcase 403:
 \det+ import_dest1.*
-                                                         List of foreign tables
-    Schema    |   Table    |     Server     |                                 FDW options                                  | Description 
---------------+------------+----------------+------------------------------------------------------------------------------+-------------
- import_dest1 | T0         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T0.parquet', sorted 'c1')         | 
- import_dest1 | T1         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T1.parquet', sorted 'c1')         | 
- import_dest1 | T2         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T2.parquet', sorted 'c1')         | 
- import_dest1 | T3         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T3.parquet', sorted 'c1')         | 
- import_dest1 | T4         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T4.parquet', sorted 'c1')         | 
- import_dest1 | base_tbl   | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/base_tbl.parquet', sorted 'c1')   | 
- import_dest1 | child_tbl  | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/child_tbl.parquet', sorted 'c1')  | 
- import_dest1 | ft1        | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/ft1.parquet', sorted 'c1')        | 
- import_dest1 | ft1_null   | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/ft1_null.parquet', sorted 'c1')   | 
- import_dest1 | loc1       | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loc1.parquet', sorted 'c1')       | 
- import_dest1 | local_tbl  | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/local_tbl.parquet', sorted 'c1')  | 
- import_dest1 | loct3      | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct3.parquet', sorted 'c1')      | 
- import_dest1 | loct_empty | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct_empty.parquet', sorted 'c1') | 
+                                                    List of foreign tables
+    Schema    |   Table    |     Server     |                            FDW options                            | Description 
+--------------+------------+----------------+-------------------------------------------------------------------+-------------
+ import_dest1 | T0         | parquet_s3_srv | (filename 's3://ported_postgres/T0.parquet', sorted 'c1')         | 
+ import_dest1 | T1         | parquet_s3_srv | (filename 's3://ported_postgres/T1.parquet', sorted 'c1')         | 
+ import_dest1 | T2         | parquet_s3_srv | (filename 's3://ported_postgres/T2.parquet', sorted 'c1')         | 
+ import_dest1 | T3         | parquet_s3_srv | (filename 's3://ported_postgres/T3.parquet', sorted 'c1')         | 
+ import_dest1 | T4         | parquet_s3_srv | (filename 's3://ported_postgres/T4.parquet', sorted 'c1')         | 
+ import_dest1 | base_tbl   | parquet_s3_srv | (filename 's3://ported_postgres/base_tbl.parquet', sorted 'c1')   | 
+ import_dest1 | child_tbl  | parquet_s3_srv | (filename 's3://ported_postgres/child_tbl.parquet', sorted 'c1')  | 
+ import_dest1 | ft1        | parquet_s3_srv | (filename 's3://ported_postgres/ft1.parquet', sorted 'c1')        | 
+ import_dest1 | ft1_null   | parquet_s3_srv | (filename 's3://ported_postgres/ft1_null.parquet', sorted 'c1')   | 
+ import_dest1 | loc1       | parquet_s3_srv | (filename 's3://ported_postgres/loc1.parquet', sorted 'c1')       | 
+ import_dest1 | local_tbl  | parquet_s3_srv | (filename 's3://ported_postgres/local_tbl.parquet', sorted 'c1')  | 
+ import_dest1 | loct3      | parquet_s3_srv | (filename 's3://ported_postgres/loct3.parquet', sorted 'c1')      | 
+ import_dest1 | loct_empty | parquet_s3_srv | (filename 's3://ported_postgres/loct_empty.parquet', sorted 'c1') | 
 (13 rows)
 
 --Testcase 404:
@@ -7136,7 +7154,7 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS 
  c7     | text                        |           |          |         | 
  c8     | text                        |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/T0.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/T0.parquet', sorted 'c1')
 
                            Foreign table "import_dest1.T1"
  Column |            Type             | Collation | Nullable | Default | FDW options 
@@ -7149,7 +7167,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/T0.parquet', sorted 'c1'
  c7     | text                        |           |          |         | 
  c8     | text                        |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/T1.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/T1.parquet', sorted 'c1')
 
                 Foreign table "import_dest1.T2"
  Column |  Type  | Collation | Nullable | Default | FDW options 
@@ -7157,7 +7175,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/T1.parquet', sorted 'c1'
  c1     | bigint |           |          |         | 
  c2     | text   |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/T2.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/T2.parquet', sorted 'c1')
 
                 Foreign table "import_dest1.T3"
  Column |  Type  | Collation | Nullable | Default | FDW options 
@@ -7166,7 +7184,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/T2.parquet', sorted 'c1'
  c2     | bigint |           |          |         | 
  c3     | text   |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/T3.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/T3.parquet', sorted 'c1')
 
                 Foreign table "import_dest1.T4"
  Column |  Type  | Collation | Nullable | Default | FDW options 
@@ -7175,7 +7193,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/T3.parquet', sorted 'c1'
  c2     | bigint |           |          |         | 
  c3     | text   |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/T4.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/T4.parquet', sorted 'c1')
 
                   Foreign table "import_dest1.base_tbl"
  Column |       Type       | Collation | Nullable | Default | FDW options 
@@ -7183,7 +7201,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/T4.parquet', sorted 'c1'
  a      | double precision |           |          |         | 
  b      | double precision |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/base_tbl.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/base_tbl.parquet', sorted 'c1')
 
                   Foreign table "import_dest1.child_tbl"
  Column |       Type       | Collation | Nullable | Default | FDW options 
@@ -7191,7 +7209,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/base_tbl.parquet', sorte
  a      | double precision |           |          |         | 
  b      | double precision |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/child_tbl.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/child_tbl.parquet', sorted 'c1')
 
                           Foreign table "import_dest1.ft1"
  Column |            Type             | Collation | Nullable | Default | FDW options 
@@ -7204,7 +7222,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/child_tbl.parquet', sort
  c7     | text                        |           |          |         | 
  c8     | text                        |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/ft1.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/ft1.parquet', sorted 'c1')
 
                         Foreign table "import_dest1.ft1_null"
  Column |            Type             | Collation | Nullable | Default | FDW options 
@@ -7217,7 +7235,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/ft1.parquet', sorted 'c1
  c7     | text                        |           |          |         | 
  c8     | text                        |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/ft1_null.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/ft1_null.parquet', sorted 'c1')
 
               Foreign table "import_dest1.loc1"
  Column | Type | Collation | Nullable | Default | FDW options 
@@ -7225,7 +7243,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/ft1_null.parquet', sorte
  f1     | text |           |          |         | 
  f2     | text |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/loc1.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/loc1.parquet', sorted 'c1')
 
              Foreign table "import_dest1.local_tbl"
  Column |  Type  | Collation | Nullable | Default | FDW options 
@@ -7234,7 +7252,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/loc1.parquet', sorted 'c
  c2     | bigint |           |          |         | 
  c3     | text   |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/local_tbl.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/local_tbl.parquet', sorted 'c1')
 
               Foreign table "import_dest1.loct3"
  Column | Type | Collation | Nullable | Default | FDW options 
@@ -7243,7 +7261,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/local_tbl.parquet', sort
  f2     | text |           |          |         | 
  f3     | text |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/loct3.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/loct3.parquet', sorted 'c1')
 
             Foreign table "import_dest1.loct_empty"
  Column |  Type  | Collation | Nullable | Default | FDW options 
@@ -7251,7 +7269,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/loct3.parquet', sorted '
  c1     | bigint |           |          |         | 
  c2     | text   |           |          |         | 
 Server: parquet_s3_srv
-FDW options: (filename '/tmp/data_local/ported_postgres/loct_empty.parquet', sorted 'c1')
+FDW options: (filename 's3://ported_postgres/loct_empty.parquet', sorted 'c1')
 
 -- Options
 -- CREATE SCHEMA import_dest2;
@@ -7261,7 +7279,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/loct_empty.parquet', sor
 -- \d import_dest2.*
 -- CREATE SCHEMA import_dest3;
 -- IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest3
---   OPTIONS (import_collate 'false', import_not_null 'false');
+--   OPTIONS (import_collate 'false', import_generated 'false', import_not_null 'false');
 -- \det+ import_dest3.*
 -- \d import_dest3.*
 -- Check LIMIT TO and EXCEPT
@@ -7441,7 +7459,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/loct_empty.parquet', sor
 -- 	c7 char(10) default 'ft1',
 -- 	c8 user_enum
 -- ) SERVER loopback_nopw OPTIONS (schema_name 'public', table_name 'ft1');
--- SELECT * FROM ft1_nopw LIMIT 1;
+-- SELECT 1 FROM ft1_nopw LIMIT 1;
 -- If we add a password to the connstr it'll fail, because we don't allow passwords
 -- in connstrs only in user mappings.
 -- DO $d$
@@ -7454,16 +7472,16 @@ FDW options: (filename '/tmp/data_local/ported_postgres/loct_empty.parquet', sor
 --
 -- This won't work with installcheck, but neither will most of the FDW checks.
 -- ALTER USER MAPPING FOR CURRENT_USER SERVER loopback_nopw OPTIONS (ADD password 'dummypw');
--- SELECT * FROM ft1_nopw LIMIT 1;
+-- SELECT 1 FROM ft1_nopw LIMIT 1;
 -- Unpriv user cannot make the mapping passwordless
 -- ALTER USER MAPPING FOR CURRENT_USER SERVER loopback_nopw OPTIONS (ADD password_required 'false');
--- SELECT * FROM ft1_nopw LIMIT 1;
+-- SELECT 1 FROM ft1_nopw LIMIT 1;
 -- RESET ROLE;
 -- But the superuser can
 -- ALTER USER MAPPING FOR regress_nosuper SERVER loopback_nopw OPTIONS (ADD password_required 'false');
 -- SET ROLE regress_nosuper;
 -- Should finally work now
--- SELECT * FROM ft1_nopw LIMIT 1;
+-- SELECT 1 FROM ft1_nopw LIMIT 1;
 -- unpriv user also cannot set sslcert / sslkey on the user mapping
 -- first set password_required so we see the right error messages
 -- ALTER USER MAPPING FOR CURRENT_USER SERVER loopback_nopw OPTIONS (SET password_required 'true');
@@ -7497,11 +7515,11 @@ FDW options: (filename '/tmp/data_local/ported_postgres/loct_empty.parquet', sor
 -- Change application_name of remote connection to special one
 -- so that we can easily terminate the connection later.
 -- ALTER SERVER parquet_s3_srv OPTIONS (application_name 'fdw_retry_check');
--- If debug_invalidate_system_caches_always is active, it results in
+-- If debug_discard_caches is active, it results in
 -- dropping remote connections after every transaction, making it
 -- impossible to test termination meaningfully.  So turn that off
 -- for this test.
--- SET debug_invalidate_system_caches_always = 0;
+-- SET debug_discard_caches = 0;
 -- Make sure we have a remote connection.
 -- SELECT 1 FROM ft1 LIMIT 1;
 -- Terminate the remote connection and wait for the termination to complete.
@@ -7522,7 +7540,7 @@ FDW options: (filename '/tmp/data_local/ported_postgres/loct_empty.parquet', sor
 -- SELECT 1 FROM ft1 LIMIT 1;    -- should fail
 -- \set VERBOSITY default
 -- COMMIT;
--- RESET debug_invalidate_system_caches_always;
+-- RESET debug_discard_caches;
 -- =============================================================================
 -- test connection invalidation cases and parquet_s3_fdw_get_connections function
 -- with local parquet file (not on minio/s3 servers). It haven't server and connection.
@@ -7563,9 +7581,11 @@ SELECT 1 FROM ft7 LIMIT 1;
 -- output.
 --Testcase 409:
 SELECT server_name FROM parquet_s3_fdw_get_connections() ORDER BY 1;  -- return 0 rows if not use minio/s3 servers.
- server_name 
--------------
-(0 rows)
+   server_name    
+------------------
+ parquet_s3_srv
+ parquet_s3_srv_3
+(2 rows)
 
 -- Connections are not closed at the end of the alter and drop statements.
 -- That's because the connections are in midst of this xact,
@@ -7573,7 +7593,7 @@ SELECT server_name FROM parquet_s3_fdw_get_connections() ORDER BY 1;  -- return 
 ALTER SERVER parquet_s3_srv OPTIONS (ADD use_remote_estimate 'off');
 --Testcase 410:
 DROP SERVER parquet_s3_srv_3 CASCADE;
-psql:sql/14beta2/parquet_s3_fdw_post.sql:3241: NOTICE:  drop cascades to 2 other objects
+psql:sql/13.4/parquet_s3_fdw_post.sql:3273: NOTICE:  drop cascades to 2 other objects
 DETAIL:  drop cascades to user mapping for public on server parquet_s3_srv_3
 drop cascades to foreign table ft7
 -- List all the existing cached connections. parquet_s3_srv and parquet_s3_srv_3
@@ -7581,9 +7601,11 @@ drop cascades to foreign table ft7
 -- parquet_s3_srv_3 should be NULL because the server was dropped.
 --Testcase 411:
 SELECT * FROM parquet_s3_fdw_get_connections() ORDER BY 1;  -- return 0 rows if not use minio/s3 servers.
- server_name | valid 
--------------+-------
-(0 rows)
+  server_name   | valid 
+----------------+-------
+ parquet_s3_srv | f
+                | f
+(2 rows)
 
 -- The invalid connections get closed in pgfdw_xact_callback during commit.
 -- COMMIT;
@@ -7623,9 +7645,11 @@ SELECT 1 FROM ft6 LIMIT 1;
 -- output.
 --Testcase 415:
 SELECT server_name FROM parquet_s3_fdw_get_connections() ORDER BY 1;  -- return 0 rows if not use minio/s3 servers.
- server_name 
--------------
-(0 rows)
+   server_name    
+------------------
+ parquet_s3_srv
+ parquet_s3_srv_2
+(2 rows)
 
 -- Issue a warning and return false as parquet_s3_srv connection is still in use and
 -- can not be closed.
@@ -7634,9 +7658,11 @@ SELECT server_name FROM parquet_s3_fdw_get_connections() ORDER BY 1;  -- return 
 -- output.
 --Testcase 416:
 SELECT server_name FROM parquet_s3_fdw_get_connections() ORDER BY 1;  -- return 0 rows if not use minio/s3 servers.
- server_name 
--------------
-(0 rows)
+   server_name    
+------------------
+ parquet_s3_srv
+ parquet_s3_srv_2
+(2 rows)
 
 -- Return false as connections are still in use, warnings are issued.
 -- But disable warnings temporarily because the order of them is not stable.
@@ -7669,7 +7695,7 @@ SELECT parquet_s3_fdw_disconnect('parquet_s3_srv_2');
 -- Return an error as there is no foreign server with given name.
 --Testcase 420:
 SELECT parquet_s3_fdw_disconnect('unknownserver');
-psql:sql/14beta2/parquet_s3_fdw_post.sql:3294: ERROR:  server "unknownserver" does not exist
+psql:sql/13.4/parquet_s3_fdw_post.sql:3326: ERROR:  server "unknownserver" does not exist
 -- Let's ensure to close all the existing cached connections.
 --Testcase 421:
 SELECT 1 FROM parquet_s3_fdw_disconnect_all();
@@ -7721,9 +7747,11 @@ RESET ROLE;
 -- Should output two connections for parquet_s3_srv server
 --Testcase 429:
 SELECT server_name FROM parquet_s3_fdw_get_connections() ORDER BY 1; -- return 0 rows if not use minio/s3 servers.
- server_name 
--------------
-(0 rows)
+  server_name   
+----------------
+ parquet_s3_srv
+ parquet_s3_srv
+(2 rows)
 
 -- COMMIT;
 -- Let's ensure to close all the existing cached connections.
@@ -8001,14 +8029,20 @@ ALTER SERVER parquet_s3_srv OPTIONS (SET keep_connections 'on');
 -- EXPLAIN (VERBOSE, COSTS OFF)
 -- SELECT * FROM async_pt t1, async_p2 t2 WHERE t1.a = t2.a AND t1.b === 505;
 -- SELECT * FROM async_pt t1, async_p2 t2 WHERE t1.a = t2.a AND t1.b === 505;
+-- CREATE TABLE local_tbl (a int, b int, c text);
+-- INSERT INTO local_tbl VALUES (1505, 505, 'foo');
+-- ANALYZE local_tbl;
+-- EXPLAIN (VERBOSE, COSTS OFF)
+-- SELECT * FROM local_tbl t1 LEFT JOIN (SELECT *, (SELECT count(*) FROM async_pt WHERE a < 3000) FROM async_pt WHERE a < 3000) t2 ON t1.a = t2.a;
+-- EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+-- SELECT * FROM local_tbl t1 LEFT JOIN (SELECT *, (SELECT count(*) FROM async_pt WHERE a < 3000) FROM async_pt WHERE a < 3000) t2 ON t1.a = t2.a;
+-- SELECT * FROM local_tbl t1 LEFT JOIN (SELECT *, (SELECT count(*) FROM async_pt WHERE a < 3000) FROM async_pt WHERE a < 3000) t2 ON t1.a = t2.a;
 -- EXPLAIN (VERBOSE, COSTS OFF)
 -- SELECT * FROM async_pt t1 WHERE t1.b === 505 LIMIT 1;
 -- EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
 -- SELECT * FROM async_pt t1 WHERE t1.b === 505 LIMIT 1;
 -- SELECT * FROM async_pt t1 WHERE t1.b === 505 LIMIT 1;
 -- Check with foreign modify
--- CREATE TABLE local_tbl (a int, b int, c text);
--- INSERT INTO local_tbl VALUES (1505, 505, 'foo');
 -- CREATE TABLE base_tbl3 (a int, b int, c text);
 -- CREATE FOREIGN TABLE remote_tbl (a int, b int, c text)
 --   SERVER loopback OPTIONS (table_name 'base_tbl3');
@@ -8056,6 +8090,21 @@ ALTER SERVER parquet_s3_srv OPTIONS (SET keep_connections 'on');
 -- DROP TABLE join_tbl;
 -- ALTER SERVER loopback OPTIONS (DROP async_capable);
 -- ALTER SERVER loopback2 OPTIONS (DROP async_capable);
+-- ===================================================================
+-- test invalid server and foreign table options
+-- ===================================================================
+-- Invalid fdw_startup_cost option
+-- CREATE SERVER inv_scst FOREIGN DATA WRAPPER postgres_fdw
+-- 	OPTIONS(fdw_startup_cost '100$%$#$#');
+-- -- Invalid fdw_tuple_cost option
+-- CREATE SERVER inv_scst FOREIGN DATA WRAPPER postgres_fdw
+-- 	OPTIONS(fdw_tuple_cost '100$%$#$#');
+-- -- Invalid fetch_size option
+-- CREATE FOREIGN TABLE inv_fsz (c1 int )
+-- 	SERVER loopback OPTIONS (fetch_size '100$%$#$#');
+-- -- Invalid batch_size option
+-- CREATE FOREIGN TABLE inv_bsz (c1 int )
+-- 	SERVER loopback OPTIONS (batch_size '100$%$#$#');
 -- Clean-up
 SET client_min_messages TO WARNING;
 --Testcase 438:

@@ -1317,7 +1317,7 @@ parquetGetForeignPlan(PlannerInfo * /* root */,
     if (fdw_private->s3client)
     {
         if(fdw_private->dirname == NULL)
-            params = lappend(params, makeString(""));
+            params = lappend(params, makeString((char *) ""));
         else
             params = lappend(params, makeString(fdw_private->dirname));
         params = lappend(params, makeInteger(foreigntableid));
@@ -1341,7 +1341,7 @@ parquetGetForeignPlan(PlannerInfo * /* root */,
 extern "C" void
 parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
 {
-    ParquetS3FdwExecutionState   *festate;
+    ParquetS3FdwExecutionState   *festate = NULL;
     MemoryContextCallback      *callback;
     MemoryContext   reader_cxt;
 	ForeignScan    *plan = (ForeignScan *) node->ss.ps.plan;

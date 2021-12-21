@@ -25,35 +25,6 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 
-/*
- * Describes the valid options for server that use this wrapper.
- */
-typedef struct ParquetS3FdwServerOption
-{
-	const char *optname;
-	Oid			optcontext;		/* Oid of catalog in which option may appear */
-}			ParquetS3FdwServerOption;
-
-
-/*
- * Valid options for parquet_s3_fdw.
- *
- */
-static ParquetS3FdwServerOption parquet_s3_server_options[] =
-{
-	/* Connection options */
-	{
-		SERVER_OPTION_USE_MINIO, ForeignServerRelationId
-	},
-	/* Keep Connections options */
-	{
-		SERVER_OPTION_KEEP_CONNECTIONS, ForeignServerRelationId
-	},
-	/* Sentinel */
-	{
-		NULL, InvalidOid
-	}
-};
 
 /*
  * Check if the provided option is one of the valid options.
@@ -61,18 +32,16 @@ static ParquetS3FdwServerOption parquet_s3_server_options[] =
 bool
 parquet_s3_is_valid_server_option(DefElem *def)
 {
-	struct ParquetS3FdwServerOption *opt;
-
 	if (strcmp(def->defname, SERVER_OPTION_USE_MINIO) == 0 ||
 		strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0)
 	{
 		/* Check that bool value is valid */
-		bool	check_bool_valid;
+		bool		check_bool_valid;
 
 		if (!parse_bool(defGetString(def), &check_bool_valid))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						errmsg("parquet_s3_fdw: invalid value for boolean option \"%s\": %s",
+					 errmsg("parquet_s3_fdw: invalid value for boolean option \"%s\": %s",
 							def->defname, defGetString(def))));
 		return true;
 	}
@@ -84,7 +53,7 @@ parquet_s3_is_valid_server_option(DefElem *def)
  * Extract listed option information into parquet_s3_server_opt structure.
  */
 static void
-extract_options(List *options, parquet_s3_server_opt *opt)
+parquet_s3_extract_options(List *options, parquet_s3_server_opt * opt)
 {
 	ListCell   *lc;
 
@@ -145,7 +114,7 @@ parquet_s3_get_options(Oid foreignoid)
 	options = list_concat(options, f_mapping->options);
 
 	/* Store option information into the structure. */
-	extract_options(options, opt);
+	parquet_s3_extract_options(options, opt);
 
 	return opt;
 }
@@ -173,7 +142,7 @@ parquet_s3_get_server_options(Oid serverid)
 	options = f_server->options;
 
 	/* Store option information into the structure. */
-	extract_options(options, opt);
+	parquet_s3_extract_options(options, opt);
 
 	return opt;
 }

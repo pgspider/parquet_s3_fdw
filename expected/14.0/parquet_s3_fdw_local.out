@@ -85,15 +85,15 @@ EXPLAIN (COSTS OFF) SELECT * FROM example1 ORDER BY three;
 SET client_min_messages = DEBUG1;
 --Testcase 12:
 SELECT * FROM example1 WHERE one < 1;
-psql:sql/13.3/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/13.3/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.0/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.0/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
 
 --Testcase 13:
 SELECT * FROM example1 WHERE one <= 1;
-psql:sql/13.3/parquet_s3_fdw.sql:51: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.0/parquet_s3_fdw.sql:51: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |   two   | three |        four         |    five    | six | seven 
 -----+---------+-------+---------------------+------------+-----+-------
    1 | {1,2,3} | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
@@ -101,15 +101,15 @@ psql:sql/13.3/parquet_s3_fdw.sql:51: DEBUG:  parquet_s3_fdw: skip rowgroup 2
 
 --Testcase 14:
 SELECT * FROM example1 WHERE one > 6;
-psql:sql/13.3/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/13.3/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.0/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.0/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
 
 --Testcase 15:
 SELECT * FROM example1 WHERE one >= 6;
-psql:sql/13.3/parquet_s3_fdw.sql:55: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.0/parquet_s3_fdw.sql:55: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  one |    two     | three |        four         |    five    | six | seven 
 -----+------------+-------+---------------------+------------+-----+-------
    6 | {16,17,18} | tres  | 2018-01-06 00:00:00 | 2018-01-06 | f   |     2
@@ -117,7 +117,7 @@ psql:sql/13.3/parquet_s3_fdw.sql:55: DEBUG:  parquet_s3_fdw: skip rowgroup 1
 
 --Testcase 16:
 SELECT * FROM example1 WHERE one = 2;
-psql:sql/13.3/parquet_s3_fdw.sql:57: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.0/parquet_s3_fdw.sql:57: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |    two     | three |        four         |    five    | six | seven 
 -----+------------+-------+---------------------+------------+-----+-------
    2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00 | 2018-01-02 | f   |      
@@ -125,15 +125,15 @@ psql:sql/13.3/parquet_s3_fdw.sql:57: DEBUG:  parquet_s3_fdw: skip rowgroup 2
 
 --Testcase 17:
 SELECT * FROM example1 WHERE one = 7;
-psql:sql/13.3/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/13.3/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.0/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.0/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
 
 --Testcase 18:
 SELECT * FROM example1 WHERE six = true;
-psql:sql/13.3/parquet_s3_fdw.sql:61: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.0/parquet_s3_fdw.sql:61: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |   two   | three |        four         |    five    | six | seven 
 -----+---------+-------+---------------------+------------+-----+-------
    1 | {1,2,3} | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
@@ -152,7 +152,7 @@ SELECT * FROM example1 WHERE six = false;
 
 --Testcase 20:
 SELECT * FROM example1 WHERE seven < 1.5;
-psql:sql/13.3/parquet_s3_fdw.sql:65: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.0/parquet_s3_fdw.sql:65: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |   two   | three |        four         |    five    | six | seven 
 -----+---------+-------+---------------------+------------+-----+-------
    1 | {1,2,3} | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
@@ -170,7 +170,7 @@ SELECT * FROM example1 WHERE seven <= 1.5;
 
 --Testcase 22:
 SELECT * FROM example1 WHERE seven = 1.5;
-psql:sql/13.3/parquet_s3_fdw.sql:69: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.0/parquet_s3_fdw.sql:69: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  one |    two     | three |        four         |    five    | six | seven 
 -----+------------+-------+---------------------+------------+-----+-------
    4 | {10,11,12} | uno   | 2018-01-04 00:00:00 | 2018-01-04 | f   |   1.5
@@ -178,7 +178,7 @@ psql:sql/13.3/parquet_s3_fdw.sql:69: DEBUG:  parquet_s3_fdw: skip rowgroup 1
 
 --Testcase 23:
 SELECT * FROM example1 WHERE seven > 1;
-psql:sql/13.3/parquet_s3_fdw.sql:71: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.0/parquet_s3_fdw.sql:71: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  one |    two     | three |        four         |    five    | six | seven 
 -----+------------+-------+---------------------+------------+-----+-------
    4 | {10,11,12} | uno   | 2018-01-04 00:00:00 | 2018-01-04 | f   |   1.5
@@ -207,7 +207,7 @@ SELECT * FROM example1 WHERE seven IS NULL;
 prepare prep(date) as select * from example1 where five < $1;
 --Testcase 27:
 execute prep('2018-01-03');
-psql:sql/13.3/parquet_s3_fdw.sql:81: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.0/parquet_s3_fdw.sql:81: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |    two     | three |        four         |    five    | six | seven 
 -----+------------+-------+---------------------+------------+-----+-------
    1 | {1,2,3}    | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
@@ -216,8 +216,8 @@ psql:sql/13.3/parquet_s3_fdw.sql:81: DEBUG:  parquet_s3_fdw: skip rowgroup 2
 
 --Testcase 28:
 execute prep('2018-01-01');
-psql:sql/13.3/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/13.3/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.0/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.0/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
@@ -227,18 +227,18 @@ SET client_min_messages = WARNING;
 --Testcase 29:
 CREATE FOREIGN TABLE example_fail (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv;
-psql:sql/13.3/parquet_s3_fdw.sql:89: ERROR:  parquet_s3_fdw: filename or function is required
+psql:sql/14.0/parquet_s3_fdw.sql:89: ERROR:  parquet_s3_fdw: filename or function is required
 --Testcase 30:
 CREATE FOREIGN TABLE example_fail (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (filename 'nonexistent.parquet', some_option '123');
-psql:sql/13.3/parquet_s3_fdw.sql:93: ERROR:  parquet_s3_fdw: No such file or directory
+psql:sql/14.0/parquet_s3_fdw.sql:93: ERROR:  parquet_s3_fdw: No such file or directory
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
 --Testcase 31:
 CREATE FOREIGN TABLE example_fail (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (filename :'var', some_option '123');
-psql:sql/13.3/parquet_s3_fdw.sql:98: ERROR:  parquet_s3_fdw: invalid option "some_option"
+psql:sql/14.0/parquet_s3_fdw.sql:98: ERROR:  parquet_s3_fdw: invalid option "some_option"
 -- type mismatch
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
 --Testcase 32:
@@ -247,10 +247,10 @@ SERVER parquet_s3_srv
 OPTIONS (filename :'var', sorted 'one');
 --Testcase 33:
 SELECT one FROM example_fail;
-psql:sql/13.3/parquet_s3_fdw.sql:107: ERROR:  parquet_s3_fdw: parquet_s3_fdw: cast function to bigint[] ('one' column) is not found
+psql:sql/14.0/parquet_s3_fdw.sql:107: ERROR:  parquet_s3_fdw: parquet_s3_fdw: cast function to bigint[] ('one' column) is not found
 --Testcase 34:
 SELECT two FROM example_fail;
-psql:sql/13.3/parquet_s3_fdw.sql:109: ERROR:  parquet_s3_fdw: parquet_s3_fdw: cannot convert parquet column of type LIST to scalar type of  postgres column 'two'
+psql:sql/14.0/parquet_s3_fdw.sql:109: ERROR:  parquet_s3_fdw: parquet_s3_fdw: cannot convert parquet column of type LIST to scalar type of  postgres column 'two'
 -- files_func
 --Testcase 35:
 CREATE FUNCTION list_parquet_s3_files(args JSONB)
@@ -299,17 +299,17 @@ LANGUAGE SQL;
 CREATE FOREIGN TABLE example_inv_func (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (files_func 'int_array_func');
-psql:sql/13.3/parquet_s3_fdw.sql:144: ERROR:  parquet_s3_fdw: return type of 'int_array_func' is integer[]; expected text[]
+psql:sql/14.0/parquet_s3_fdw.sql:144: ERROR:  parquet_s3_fdw: return type of 'int_array_func' is integer[]; expected text[]
 --Testcase 41:
 CREATE FOREIGN TABLE example_inv_func (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (files_func 'no_args_func');
-psql:sql/13.3/parquet_s3_fdw.sql:148: ERROR:  function no_args_func(jsonb) does not exist
+psql:sql/14.0/parquet_s3_fdw.sql:148: ERROR:  function no_args_func(jsonb) does not exist
 --Testcase 42:
 CREATE FOREIGN TABLE example_inv_func (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (files_func 'list_parquet_s3_files', files_func_arg 'invalid json');
-psql:sql/13.3/parquet_s3_fdw.sql:152: ERROR:  invalid input syntax for type json
+psql:sql/14.0/parquet_s3_fdw.sql:152: ERROR:  invalid input syntax for type json
 DETAIL:  Token "invalid" is invalid.
 CONTEXT:  JSON data, line 1: invalid...
 --Testcase 43:
@@ -603,7 +603,7 @@ SELECT * FROM example3;
 
 --Testcase 68:
 SELECT * FROM example3 WHERE three = 3;
-psql:sql/13.3/parquet_s3_fdw.sql:269: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.0/parquet_s3_fdw.sql:269: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  one | two | three 
 -----+-----+-------
 (0 rows)
@@ -627,14 +627,14 @@ SET client_min_messages = WARNING;
 SELECT * FROM public.parquet_s3_fdw_version();
  parquet_s3_fdw_version 
 ------------------------
-                    200
+                    201
 (1 row)
 
 --Testcase 71:
 SELECT parquet_s3_fdw_version();
  parquet_s3_fdw_version 
 ------------------------
-                    200
+                    201
 (1 row)
 
 --Testcase 72:
