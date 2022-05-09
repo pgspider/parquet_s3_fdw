@@ -55,8 +55,13 @@ df3 = pd.DataFrame({'one': [1, 3, 5, 7, 9],
                     'six': [True, False, True, False, True]})
 table3 = pa.Table.from_pandas(df3)
 
+# an empty data frame to test corner case
+df4 = df3.drop([0, 1, 2, 3, 4])
+table4 = pa.Table.from_pandas(df4, schema=table3.schema)
+
 with pq.ParquetWriter('simple/example2.parquet', table3.schema) as writer:
     writer.write_table(table3)
+    writer.write_table(table4)
 
 # example3.parquet file
 mdt1 = pa.map_(pa.int32(), pa.string())
@@ -81,4 +86,24 @@ schema = pa.schema([
 table = pa.Table.from_pandas(df, schema)
 
 with pq.ParquetWriter('complex/example3.parquet', table.schema) as writer:
+    writer.write_table(table)
+
+# example4.parquet file
+mdt1 = pa.map_(pa.int32(), pa.string())
+mdt2 = pa.list_(pa.int32())
+df = pd.DataFrame({
+        'jsonb_col': pd.Series([
+            [(1, 'foo'), (2, 'bar'), (3, 'baz')],
+            [(4, 'test1'), (5,'test2')],
+        ]),
+        'array_col':[[19, 20], [21, 22]]
+    }
+)
+
+schema = pa.schema([
+    pa.field('jsonb_col', mdt1),
+    pa.field('array_col', mdt2)])
+table = pa.Table.from_pandas(df, schema)
+
+with pq.ParquetWriter('complex/example4.parquet', table.schema) as writer:
     writer.write_table(table)

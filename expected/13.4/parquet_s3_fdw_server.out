@@ -87,7 +87,6 @@ SET client_min_messages = DEBUG1;
 SELECT * FROM example1 WHERE one < 1;
 psql:sql/13.4/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 1
 psql:sql/13.4/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 2
-psql:sql/13.4/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datasimple/example1.parquet
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
@@ -105,7 +104,6 @@ psql:sql/13.4/parquet_s3_fdw.sql:51: DEBUG:  parquet_s3_fdw: open Parquet file o
 SELECT * FROM example1 WHERE one > 6;
 psql:sql/13.4/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 1
 psql:sql/13.4/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 2
-psql:sql/13.4/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datasimple/example1.parquet
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
@@ -132,7 +130,6 @@ psql:sql/13.4/parquet_s3_fdw.sql:57: DEBUG:  parquet_s3_fdw: open Parquet file o
 SELECT * FROM example1 WHERE one = 7;
 psql:sql/13.4/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 1
 psql:sql/13.4/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 2
-psql:sql/13.4/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datasimple/example1.parquet
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
@@ -233,7 +230,6 @@ psql:sql/13.4/parquet_s3_fdw.sql:81: DEBUG:  parquet_s3_fdw: open Parquet file o
 execute prep('2018-01-01');
 psql:sql/13.4/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 1
 psql:sql/13.4/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 2
-psql:sql/13.4/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datasimple/example1.parquet
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
@@ -248,7 +244,7 @@ psql:sql/13.4/parquet_s3_fdw.sql:89: ERROR:  parquet_s3_fdw: filename or functio
 CREATE FOREIGN TABLE example_fail (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (filename 'nonexistent.parquet', some_option '123');
-psql:sql/13.4/parquet_s3_fdw.sql:93: ERROR:  parquet_s3_fdw: No such file or directory
+psql:sql/13.4/parquet_s3_fdw.sql:93: ERROR:  parquet_s3_fdw: No such file or directory ('nonexistent.parquet')
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
 --Testcase 31:
 CREATE FOREIGN TABLE example_fail (one INT8, two INT8[], three TEXT)
@@ -263,10 +259,10 @@ SERVER parquet_s3_srv
 OPTIONS (filename :'var', sorted 'one');
 --Testcase 33:
 SELECT one FROM example_fail;
-psql:sql/13.4/parquet_s3_fdw.sql:107: ERROR:  parquet_s3_fdw: parquet_s3_fdw: cast function to bigint[] ('one' column) is not found
+psql:sql/13.4/parquet_s3_fdw.sql:107: ERROR:  parquet_s3_fdw: failed to initialize cast function for column 'one' (parquet_s3_fdw: coercion pathway from 'bigint' to 'bigint[]' not found)
 --Testcase 34:
 SELECT two FROM example_fail;
-psql:sql/13.4/parquet_s3_fdw.sql:109: ERROR:  parquet_s3_fdw: parquet_s3_fdw: cannot convert parquet column of type LIST to scalar type of  postgres column 'two'
+psql:sql/13.4/parquet_s3_fdw.sql:109: ERROR:  parquet_s3_fdw: cannot convert parquet column of type LIST to scalar type of postgres column 'two'
 -- files_func
 --Testcase 35:
 CREATE FUNCTION list_parquet_s3_files(args JSONB)
@@ -460,11 +456,6 @@ SELECT * FROM example_sorted_caching ORDER BY one;
 -- parallel execution
 SET parallel_setup_cost = 0;
 SET parallel_tuple_cost = 0.001;
-SET cpu_operator_cost = 0.000025;
-ANALYZE example_seq;
-ANALYZE example_sorted;
-ANALYZE example1;
---Testcase 55:
 EXPLAIN (COSTS OFF) SELECT * FROM example_seq;
                  QUERY PLAN                 
 --------------------------------------------
@@ -522,16 +513,18 @@ EXPLAIN (COSTS OFF) SELECT * FROM example_sorted;
 
 --Testcase 59:
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY one;
-                  QUERY PLAN                   
------------------------------------------------
+                     QUERY PLAN                      
+-----------------------------------------------------
  Gather Merge
    Workers Planned: 2
-   ->  Parallel Foreign Scan on example_sorted
-         Reader: Multifile
-         Row groups: 
-           example1.parquet: 1, 2
-           example2.parquet: 1
-(7 rows)
+   ->  Sort
+         Sort Key: one
+         ->  Parallel Foreign Scan on example_sorted
+               Reader: Multifile
+               Row groups: 
+                 example1.parquet: 1, 2
+                 example2.parquet: 1
+(9 rows)
 
 --Testcase 60:
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY two;
@@ -547,6 +540,19 @@ EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY two;
                  example1.parquet: 1, 2
                  example2.parquet: 1
 (9 rows)
+
+ALTER FOREIGN TABLE example_sorted OPTIONS (ADD files_in_order 'true');
+EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY one;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Gather Merge
+   Workers Planned: 2
+   ->  Parallel Foreign Scan on example_sorted
+         Reader: Multifile
+         Row groups: 
+           example1.parquet: 1, 2
+           example2.parquet: 1
+(7 rows)
 
 --Testcase 61:
 EXPLAIN (COSTS OFF) SELECT * FROM example1;
@@ -611,7 +617,9 @@ SERVER parquet_s3_srv
 OPTIONS (filename :'var', sorted 'one');
 --Testcase 67:
 SELECT * FROM example3;
-psql:sql/13.4/parquet_s3_fdw.sql:267: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datacomplex/example3.parquet
+psql:sql/13.4/parquet_s3_fdw.sql:264: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datacomplex/example3.parquet
+psql:sql/13.4/parquet_s3_fdw.sql:264: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datacomplex/example3.parquet
+psql:sql/13.4/parquet_s3_fdw.sql:264: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datacomplex/example3.parquet
                  one                  |                 two                  | three 
 --------------------------------------+--------------------------------------+-------
  {"1": "foo", "2": "bar", "3": "baz"} | {"2018-01-01": 10, "2018-01-02": 15} |     1
@@ -620,12 +628,14 @@ psql:sql/13.4/parquet_s3_fdw.sql:267: DEBUG:  parquet_s3_fdw: open Parquet file 
 
 --Testcase 68:
 SELECT * FROM example3 WHERE three = 3;
-psql:sql/13.4/parquet_s3_fdw.sql:269: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/13.4/parquet_s3_fdw.sql:269: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datacomplex/example3.parquet
+psql:sql/13.4/parquet_s3_fdw.sql:266: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  one | two | three 
 -----+-----+-------
 (0 rows)
 
+-- analyze
+ANALYZE example_sorted;
+psql:sql/13.4/parquet_s3_fdw.sql:269: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datasimple/example1.parquet
 SET client_min_messages = WARNING;
 --get version
 --Testcase 69:
@@ -645,14 +655,14 @@ SET client_min_messages = WARNING;
 SELECT * FROM public.parquet_s3_fdw_version();
  parquet_s3_fdw_version 
 ------------------------
-                    201
+                    300
 (1 row)
 
 --Testcase 71:
 SELECT parquet_s3_fdw_version();
  parquet_s3_fdw_version 
 ------------------------
-                    201
+                    300
 (1 row)
 
 --Testcase 72:

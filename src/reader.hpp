@@ -33,17 +33,100 @@ extern "C"
 #include "executor/tuptable.h"
 #include "nodes/pg_list.h"
 #include "storage/spin.h"
+#include "utils/sortsupport.h"
+#include "parser/parse_oper.h"
+#include "utils/jsonb.h"
 }
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
 #include <parquet/arrow/reader.h>
 
-struct ParallelCoordinator
+class ParallelCoordinator
 {
-    slock_t     lock;
-    int32       next_reader;
-    int32       next_rowgroup;
+private:
+    enum Type {
+        PC_SINGLE = 0,
+        PC_MULTI
+    };
+
+    Type        type;
+    slock_t     latch;
+    union
+    {
+        struct
+        {
+            int32   reader;     /* current reader */
+            int32   rowgroup;   /* current rowgroup */
+            int32   nfiles;     /* number of parquet files to read */
+            int32   nrowgroups[FLEXIBLE_ARRAY_MEMBER]; /* per-file rowgroups numbers */
+        } single;               /* single file and simple multifile case */
+        struct
+        {
+            int32   next_rowgroup[FLEXIBLE_ARRAY_MEMBER]; /* per-reader counters */
+        } multi;   /* multimerge case */
+    } data;
+
+public:
+    void lock() { SpinLockAcquire(&latch); }
+    void unlock() { SpinLockRelease(&latch); }
+
+    void init_single(int32 *nrowgroups, int32 nfiles)
+    {
+        type = PC_SINGLE;
+        data.single.reader = -1;
+        data.single.rowgroup =-1;
+        data.single.nfiles = nfiles;
+
+        SpinLockInit(&latch);
+        if (nfiles)
+            memcpy(data.single.nrowgroups, nrowgroups, sizeof(int32) * nfiles);
+    }
+
+    void init_multi(int nfiles)
+    {
+        type = PC_MULTI;
+        for (int i = 0; i < nfiles; ++i)
+            data.multi.next_rowgroup[i] = 0;
+    }
+
+    /* Get the next reader id. Caller must hold the lock. */
+    int32 next_reader()
+    {
+        if (type == PC_SINGLE)
+        {
+            /* Return current reader if it has more rowgroups to read */
+            if (data.single.reader >= 0 && data.single.reader < data.single.nfiles
+                && data.single.nrowgroups[data.single.reader] > data.single.rowgroup + 1)
+                return data.single.reader;
+
+            data.single.reader++;
+            data.single.rowgroup = -1;
+
+            return data.single.reader;
+        }
+
+        Assert(false && "unsupported");
+        return -1;
+    }
+
+    /* Get the next reader id. Caller must hold the lock. */
+    int32 next_rowgroup(int32 reader_id)
+    {
+        if (type == PC_SINGLE)
+        {
+            if (reader_id != data.single.reader)
+                return -1;
+            return ++data.single.rowgroup;
+        }
+        else
+        {
+            return data.multi.next_rowgroup[reader_id]++;
+        }
+
+        Assert(false && "unsupported");
+        return -1;
+    }
 };
 
 class FastAllocatorS3;
@@ -79,8 +162,10 @@ protected:
          * Cast functions from dafult postgres type defined in `to_postgres_type`
          * to actual table column type.
          */
+        bool            need_cast;
         FmgrInfo       *castfunc;
-        FmgrInfo       *outfunc;
+        FmgrInfo       *outfunc; /* For cast via IO and for maps */
+        FmgrInfo       *infunc;  /* For cast via IO              */
 
         /* Underlying types for complex types like list and map */
         std::vector<TypeInfo> children;
@@ -93,23 +178,39 @@ protected:
         int             index;
 
         TypeInfo()
-            : arrow{}, pg{}, castfunc(nullptr), index(-1)
+            : arrow{}, pg{}, need_cast(false),
+              castfunc(nullptr), outfunc(nullptr), infunc(nullptr), index(-1)
         {}
 
         TypeInfo(TypeInfo &&ti)
-            : arrow(ti.arrow), pg(ti.pg), castfunc(nullptr),
+            : arrow(ti.arrow), pg(ti.pg), need_cast(ti.need_cast),
+              castfunc(ti.castfunc), outfunc(ti.outfunc), infunc(ti.infunc),
               children(std::move(ti.children)), index(-1)
         {}
 
-        TypeInfo(std::shared_ptr<arrow::DataType> arrow_type)
-            : arrow{arrow_type->id(), arrow_type->name()}, pg{},
-              castfunc(nullptr), index(-1)
-        {}
+        TypeInfo(std::shared_ptr<arrow::DataType> arrow_type, Oid typid=InvalidOid)
+            : TypeInfo()
+        {
+            arrow.type_id = arrow_type->id();
+            arrow.type_name = arrow_type->name();
+            pg.oid = typid;
+            pg.len = 0;
+            pg.byval = false;
+            pg.align = 0;
+        }
+    };
 
-        TypeInfo(std::shared_ptr<arrow::DataType> arrow_type, Oid typid,
-                 FmgrInfo *castfunc)
-            : arrow{arrow_type->id(), arrow_type->name()}, pg{typid, 0, false, 0},
-              castfunc(castfunc), index(-1)
+public:
+    struct preSortedColumnData
+    {
+        bool        is_available;   /* true if column is existed */
+        char       *col_name;       /* sorted column name */
+        Datum       val;            /* sorted column actual data */
+        bool        is_null;        /* true if sorted column is NULL */
+        SortSupportData sortkey;    /* sortkey make from presorted column */
+
+        preSortedColumnData()
+        :is_available(false), is_null(true)
         {}
     };
 
@@ -153,24 +254,45 @@ protected:
     /*
      * libparquet options
      */
-    bool    use_threads;
-    bool    use_mmap;
+    bool                            use_threads;
+    bool                            use_mmap;
 
-    /* Wether object is properly initialized */
-    bool    initialized;
+    /* Schemaless mode flag */
+    bool                            schemaless;
+    /* list actual column for schemaless mode */
+    std::set<std::string>           slcols;
+    /* List sorted column for schemaless mode */
+    std::set<std::string>           sorted_cols;
+    /* List sorted column actual data */
+    std::vector<preSortedColumnData>   sorted_cols_data;
+
+    /*
+     * Mapping between sorted column and arrow result set columns.
+     * Corresponds to 'sorted_cols' vector.
+     */
+    std::vector<int>                sorted_col_map;
+
+    /* Whether object is properly initialized */
+    bool                            initialized;
 
 protected:
+    Datum do_cast(Datum val, const TypeInfo &typinfo);
     Datum read_primitive_type(arrow::Array *array, const TypeInfo &typinfo,
                               int64_t i);
     Datum nested_list_to_datum(arrow::ListArray *larray, int pos, const TypeInfo &typinfo);
+    Datum nested_list_to_jsonb_datum(arrow::ListArray *larray, int pos, const TypeInfo &typinfo);
+
     Datum map_to_datum(arrow::MapArray *maparray, int pos, const TypeInfo &typinfo);
     FmgrInfo *find_castfunc(arrow::Type::type src_type, Oid dst_type,
                             const char *attname);
     FmgrInfo *find_outfunc(Oid typoid);
+    FmgrInfo *find_infunc(Oid typoid);
+    void initialize_cast(TypeInfo &typinfo, const char *attname);
     template<typename T> inline void copy_to_c_array(T *values,
                                                      const arrow::Array *array,
                                                      int elem_size);
     template <typename T> inline const T* GetPrimitiveValues(const arrow::Array& arr);
+    void schemaless_create_column_mapping(parquet::arrow::SchemaManifest  manifest);
 
 public:
     ParquetReader(MemoryContext cxt);
@@ -187,6 +309,8 @@ public:
     void set_rowgroups_list(const std::vector<int> &rowgroups);
     void set_options(bool use_threads, bool use_mmap);
     void set_coordinator(ParallelCoordinator *coord);
+    void set_schemaless_info(bool schemaless,  std::set<std::string> slcols, std::set<std::string> sorted_cols);
+    std::vector<preSortedColumnData> get_current_sorted_cols_data();
 };
 
 ParquetReader *create_parquet_reader(const char *filename,

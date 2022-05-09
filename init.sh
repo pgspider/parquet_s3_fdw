@@ -2,15 +2,18 @@
 
 rm -rf /tmp/data_local || true
 rm -rf /tmp/data_s3 || true
+rm -rf /tmp/parquet_s3_script || true
 
 mkdir -p /tmp/data_local || true
 mkdir -p /tmp/data_s3 || true
+mkdir -p /tmp/parquet_s3_script || true
 
 cp -a data /tmp/data_local
 cp -a data/ported_postgres /tmp/data_local
 cp -a data /tmp/data_s3
 cp -a data/ported_postgres /tmp/data_s3
 cp -a data/test-bucket /tmp/data_s3
+cp data/delete_first_parquet_row.py /tmp/parquet_s3_script/
 
 # start server minio/s3, by docker:
 container_name='minio_server'

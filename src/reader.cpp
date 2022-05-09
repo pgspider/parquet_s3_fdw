@@ -36,32 +36,18 @@ extern "C"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
+
+#if PG_VERSION_NUM < 110000
+#include "catalog/pg_type.h"
+#else
+#include "catalog/pg_type_d.h"
+#endif
 }
 
 #define SEGMENT_SIZE (1024 * 1024)
 
 
 bool parquet_fdw_use_threads = true;
-
-
-/*
- * XXX Currently only supports ascii strings
- */
-static char *
-tolowercase(const char *input, char *output)
-{
-    int i = 0;
-
-    Assert(strlen(input) < NAMEDATALEN -1);
-
-    do
-    {
-        output[i] = tolower(input[i]);
-    }
-    while (input[i++]);
-
-    return output;
-}
 
 
 class FastAllocatorS3
@@ -182,6 +168,202 @@ int32_t ParquetReader::id()
 }
 
 /*
+ * schemaless_create_column_mapping
+ *      - Create mapping between jsonb column and actual parquet columns.
+ *      - Create sortkeys for sorted column if existed.
+ */
+void ParquetReader::schemaless_create_column_mapping(parquet::arrow::SchemaManifest  manifest)
+{
+    std::set<std::string> slcols = this->slcols;
+    std::set<std::string> sorted_cols = this->sorted_cols;
+    bool                  is_select_all;
+
+    if (slcols.size() > 0)
+    {
+        /* If slcols != NIL, get mapping for column existed in this list */
+        is_select_all = false;
+        this->sorted_col_map.resize(slcols.size());
+    }
+    else
+    {
+        /* Otherwise, get mapping for all column in the parquet file */
+        is_select_all = true;
+        this->sorted_col_map.resize(manifest.schema_fields.size());
+    }
+
+    /* Create sortkeys list for column in sortted column list */
+    if (sorted_cols.size() > 0)
+        this->sorted_cols_data.resize(sorted_cols.size());
+
+    for (auto &schema_field : manifest.schema_fields)
+    {
+        auto field_name = schema_field.field->name();
+        auto arrow_type = schema_field.field->type();
+        char arrow_colname[255];
+        size_t sorted_col_idx;
+        bool is_target_col;
+
+        if (field_name.length() > NAMEDATALEN)
+            throw Error("parquet column name '%s' is too long (max: %d)",
+                        field_name.c_str(), NAMEDATALEN - 1);
+        tolowercase(field_name.c_str(), arrow_colname);
+
+        /* Find sorted column in parquet file */
+        sorted_col_idx = std::distance(sorted_cols.begin(), sorted_cols.find(arrow_colname));
+        /* Column will be fetch if existed in slcol list or in select all column query */
+        is_target_col = is_select_all || (slcols.find(arrow_colname) != slcols.end());
+
+        /*
+         * Create mapping for target column, and get information for sorted column.
+         */
+        if (is_target_col || sorted_col_idx < sorted_cols.size())
+        {
+            TypeInfo        typinfo(arrow_type);
+            bool            error(false);
+            std::string     col_name = std::move(arrow_colname);
+
+            /* Found mapping! */
+            this->column_names.push_back(col_name);
+
+            switch (arrow_type->id())
+            {
+                case arrow::Type::LIST:
+                {
+                    Assert(schema_field.children.size() == 1);
+                    Oid     elem_type;
+                    int16   elem_len;
+                    bool    elem_byval;
+                    char    elem_align;
+
+                    PG_TRY();
+                    {
+                        auto child_arrow_type = schema_field.children[0].field->type();
+                        elem_type = to_postgres_type(TypeInfo(child_arrow_type).arrow.type_id);
+
+                        if (OidIsValid(elem_type)) {
+                            get_typlenbyvalalign(elem_type, &elem_len,
+                                                    &elem_byval, &elem_align);
+                        }
+                    }
+                    PG_CATCH();
+                    {
+                        error = true;
+                    }
+                    PG_END_TRY();
+                    if (error)
+                        throw Error("parquet_s3_fdw: failed to get type length (column '%s')",
+                                    col_name.c_str());
+
+                    if (!OidIsValid(elem_type))
+                        throw Error("parquet_s3_fdw: cannot convert parquet "
+                                    "column of type LIST to scalar type of "
+                                    " postgres column '%s'", col_name.c_str());
+
+                    auto     &child = schema_field.children[0];
+                    typinfo.children.emplace_back(child.field->type(),
+                                                    elem_type);
+                    typinfo.pg.oid = JSONBOID;
+
+                    this->indices.push_back(child.column_index);
+                    break;
+                }
+                case arrow::Type::MAP:
+                {
+                    /*
+                     * Map has the following structure:
+                     *
+                     * Type::MAP
+                     * └─ Type::STRUCT
+                     *    ├─  key type
+                     *    └─  item type
+                     */
+                    Assert(schema_field.children.size() == 1);
+
+                    auto &strct = schema_field.children[0];
+                    Assert(strct.children.size() == 2);
+
+                    auto &key = strct.children[0];
+                    auto &item = strct.children[1];
+                    Oid pg_key_type = to_postgres_type(key.field->type()->id());
+                    Oid pg_item_type = to_postgres_type(item.field->type()->id());
+
+                    typinfo.pg.oid = JSONBOID;
+                    typinfo.children.emplace_back(key.field->type(),
+                                                    pg_key_type);
+                    typinfo.children.emplace_back(item.field->type(),
+                                                    pg_item_type);
+
+                    PG_TRY();
+                    {
+                        typinfo.children[0].outfunc = find_outfunc(pg_key_type);
+                        typinfo.children[1].outfunc = find_outfunc(pg_item_type);
+                    }
+                    PG_CATCH();
+                    {
+                        error = true;
+                    }
+                    PG_END_TRY();
+                    if (error)
+                        throw Error("failed to initialize output function for "
+                                    "Map column '%s'", col_name.c_str());
+                    this->indices.push_back(key.column_index);
+                    this->indices.push_back(item.column_index);
+                    break;
+                }
+                default:
+                {
+                    typinfo.pg.oid = to_postgres_type(typinfo.arrow.type_id);
+                    typinfo.index = schema_field.column_index;
+                    this->indices.push_back(schema_field.column_index);
+                }
+
+            }
+            /* In schemaless mode, parquet data is read as mapped type, so, cast is not needed */
+            typinfo.need_cast = false;
+            this->types.push_back(std::move(typinfo));
+
+            /* Create sortkey for sorted_col if this column existed in parquet file */
+            if (sorted_col_idx < sorted_cols.size())
+            {
+                SortSupportData sort_key;
+                Oid             sort_op;
+                preSortedColumnData sorted_col_data;
+                std::string     error;
+
+                /* Init sorted col data */
+                sorted_col_data.is_available = true;
+                sorted_col_data.col_name = pstrdup(col_name.c_str());
+                sorted_col_data.is_null = true;
+
+                memset(&sort_key, 0, sizeof(SortSupportData));
+                /* Init sortkey data */
+                sort_key.ssup_cxt = allocator->context();
+                sort_key.ssup_collation = InvalidOid;
+                sort_key.ssup_nulls_first = true;
+                sort_key.ssup_attno = sorted_col_idx;
+                sort_key.abbreviate = false;
+
+                get_sort_group_operators(typinfo.pg.oid ,
+                                        true, false, false,
+                                        &sort_op, NULL, NULL,
+                                        NULL);
+
+                PrepareSortSupportFromOrderingOp(sort_op, &sort_key);
+                sorted_col_data.sortkey = sort_key;
+
+                this->sorted_cols_data[sorted_col_idx] = sorted_col_data;
+                this->sorted_col_map[this->column_names.size() - 1] = sorted_col_idx;
+            }
+            else
+            {
+                /*  */
+                this->sorted_col_map[this->column_names.size() - 1] = -1;
+            }
+        }
+    }
+}
+
+/*
  * create_column_mapping
  *      Create mapping between tuple descriptor and parquet columns.
  */
@@ -194,6 +376,13 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
 
     if (!parquet::arrow::SchemaManifest::Make(p_schema, nullptr, props, &manifest).ok())
         throw std::runtime_error("parquet_s3_fdw: error creating arrow schema");
+
+    /* get the column mapping for schemaless mode */
+    if (this->schemaless)
+    {
+        schemaless_create_column_mapping(manifest);
+        return;
+    }
 
     this->map.resize(tupleDesc->natts);
     for (int i = 0; i < tupleDesc->natts; i++)
@@ -212,14 +401,20 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
 
         for (auto &schema_field : manifest.schema_fields)
         {
+            auto field_name = schema_field.field->name();
             auto arrow_type = schema_field.field->type();
-            auto arrow_colname = schema_field.field->name();
+            char arrow_colname[255];
+
+            if (field_name.length() > NAMEDATALEN)
+                throw Error("parquet column name '%s' is too long (max: %d)",
+                            field_name.c_str(), NAMEDATALEN - 1);
+            tolowercase(schema_field.field->name().c_str(), arrow_colname);
 
             /*
              * Compare postgres attribute name to the column name in arrow
              * schema.
              */
-            if (strcmp(pg_colname, arrow_colname.c_str()) == 0)
+            if (strcmp(pg_colname, arrow_colname) == 0)
             {
                 TypeInfo        typinfo(arrow_type);
                 bool            error(false);
@@ -257,23 +452,22 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
                         }
                         PG_END_TRY();
                         if (error)
-                            throw Error("parquet_s3_fdw: failed to get type length (column '%s')",
+                            throw Error("failed to get type length (column '%s')",
                                         pg_colname);
 
                         if (!OidIsValid(elem_type))
-                            throw Error("parquet_s3_fdw: cannot convert parquet "
-                                        "column of type LIST to scalar type of "
-                                        " postgres column '%s'", pg_colname);
+                            throw Error("cannot convert parquet column of type "
+                                        "LIST to scalar type of postgres column '%s'",
+                                        pg_colname);
 
                         auto     &child = schema_field.children[0];
-                        FmgrInfo *castfunc = find_castfunc(child.field->type()->id(),
-                                                           elem_type, attname);
                         typinfo.children.emplace_back(child.field->type(),
-                                                      elem_type, castfunc);
+                                                      elem_type);
                         TypeInfo &elem = typinfo.children[0];
                         elem.pg.len = elem_len;
                         elem.pg.byval = elem_byval;
                         elem.pg.align = elem_align;
+                        initialize_cast(elem, attname);
 
                         this->indices.push_back(child.column_index);
                         break;
@@ -299,21 +493,33 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
                         Oid pg_item_type = to_postgres_type(item.field->type()->id());
 
                         typinfo.children.emplace_back(key.field->type(),
-                                                      pg_key_type, nullptr);
+                                                      pg_key_type);
                         typinfo.children.emplace_back(item.field->type(),
-                                                      pg_item_type, nullptr);
+                                                      pg_item_type);
 
-                        typinfo.children[0].outfunc = find_outfunc(pg_key_type);
-                        typinfo.children[1].outfunc = find_outfunc(pg_item_type);
+                        PG_TRY();
+                        {
+                            typinfo.children[0].outfunc = find_outfunc(pg_key_type);
+                            typinfo.children[1].outfunc = find_outfunc(pg_item_type);
+                        }
+                        PG_CATCH();
+                        {
+                            error = true;
+                        }
+                        PG_END_TRY();
+                        if (error)
+                            throw Error("failed to initialize output function for "
+                                        "Map column '%s'", attname);
 
                         this->indices.push_back(key.column_index);
                         this->indices.push_back(item.column_index);
+
+                        /* JSONB might need cast (e.g. to TEXT) */
+                        initialize_cast(typinfo, attname);
                         break;
                     }
                     default:
-                        typinfo.castfunc = find_castfunc(typinfo.arrow.type_id,
-                                                         typinfo.pg.oid,
-                                                         attname);
+                        initialize_cast(typinfo, attname);
                         typinfo.index = schema_field.column_index;
                         this->indices.push_back(schema_field.column_index);
                 }
@@ -323,6 +529,48 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
             }
         }
     }
+}
+
+Datum ParquetReader::do_cast(Datum val, const TypeInfo &typinfo)
+{
+    MemoryContext   ccxt = CurrentMemoryContext;
+    bool            error = false;
+    char            errstr[ERROR_STR_LEN];
+
+    /* du, du cast, du cast mich... */
+    PG_TRY();
+    {
+        if (typinfo.castfunc != NULL)
+        {
+            val = FunctionCall1(typinfo.castfunc, val);
+        }
+        else if (typinfo.outfunc && typinfo.infunc)
+        {
+            char *str;
+
+            str = OutputFunctionCall(typinfo.outfunc, val);
+
+            /* TODO: specify typioparam and typmod */
+            val = InputFunctionCall(typinfo.infunc, str, 0, 0);
+        }
+    }
+    PG_CATCH();
+    {
+        ErrorData *errdata;
+
+        MemoryContextSwitchTo(ccxt);
+        error = true;
+        errdata = CopyErrorData();
+        FlushErrorState();
+
+        strncpy(errstr, errdata->message, ERROR_STR_LEN - 1);
+        FreeErrorData(errdata);
+    }
+    PG_END_TRY();
+    if (error)
+        throw std::runtime_error(errstr);
+
+    return val;
 }
 
 /*
@@ -343,6 +591,14 @@ Datum ParquetReader::read_primitive_type(arrow::Array *array,
             arrow::BooleanArray *boolarray = (arrow::BooleanArray *) array;
 
             res = BoolGetDatum(boolarray->Value(i));
+            break;
+        }
+        case arrow::Type::INT8:
+        {
+            arrow::Int8Array *intarray = (arrow::Int8Array *) array;
+            int value = intarray->Value(i);
+
+            res = Int8GetDatum(value);
             break;
         }
         case arrow::Type::INT16:
@@ -433,32 +689,8 @@ Datum ParquetReader::read_primitive_type(arrow::Array *array,
     }
 
     /* Call cast function if needed */
-    if (typinfo.castfunc != NULL)
-    {
-        MemoryContext   ccxt = CurrentMemoryContext;
-        bool            error = false;
-        char            errstr[ERROR_STR_LEN];
-
-        PG_TRY();
-        {
-            res = FunctionCall1(typinfo.castfunc, res);
-        }
-        PG_CATCH();
-        {
-            ErrorData *errdata;
-
-            MemoryContextSwitchTo(ccxt);
-            error = true;
-            errdata = CopyErrorData();
-            FlushErrorState();
-
-            strncpy(errstr, errdata->message, ERROR_STR_LEN - 1);
-            FreeErrorData(errdata);
-        }
-        PG_END_TRY();
-        if (error)
-            throw std::runtime_error(errstr);
-    }
+    if (typinfo.need_cast)
+        res = do_cast(res, typinfo);
 
     return res;
 }
@@ -547,12 +779,88 @@ construct_array:
     return PointerGetDatum(res);
 }
 
+/*
+ * nested_list_to_jsonb_datum
+ *      Returns postgres JSONB array build from elements of array. Only one
+ *      dimensional arrays are supported.
+ */
+Datum ParquetReader::nested_list_to_jsonb_datum(arrow::ListArray *larray, int pos,
+                                           const TypeInfo &typinfo)
+{
+    JsonbParseState *parseState = NULL;
+    JsonbValue *res;
+    Datum      *values;
+    bool       *nulls = NULL;
+    bool        error = false;
+
+    std::shared_ptr<arrow::Array> array =
+        larray->values()->Slice(larray->value_offset(pos),
+                                larray->value_length(pos));
+
+    const TypeInfo &elemtypinfo = typinfo.children[0];
+
+    values = (Datum *) this->allocator->fast_alloc(sizeof(Datum) * array->length());
+
+    nulls = (bool *) this->allocator->fast_alloc(sizeof(bool) * array->length());
+    memset(nulls, 0, sizeof(bool) * array->length());
+
+#if SIZEOF_DATUM == 8
+    /* Fill values and nulls arrays */
+    if (array->null_count() == 0 && typinfo.arrow.type_id == arrow::Type::INT64)
+    {
+        /*
+         * Ok, there are no nulls, so probably we could just memcpy the
+         * entire array.
+         *
+         * Warning: the code below is based on the assumption that Datum is
+         * 8 bytes long, which is true for most contemporary systems but this
+         * will not work on some exotic or really old systems.
+         */
+        copy_to_c_array<int64_t>((int64_t *) values, array.get(), elemtypinfo.pg.len);
+        goto construct_jsonb;
+    }
+#endif
+    for (int64_t i = 0; i < array->length(); ++i)
+    {
+        if (!array->IsNull(i))
+            values[i] = this->read_primitive_type(array.get(), elemtypinfo, i);
+        else
+            nulls[i] = true;
+    }
+
+construct_jsonb:
+    /*
+     * Construct one dimensional jsonb array. We have to use PG_TRY / PG_CATCH
+     * to prevent any kind leaks of resources allocated by c++ in case of
+     * errors.
+     */
+    PG_TRY();
+    {
+        res = pushJsonbValue(&parseState, WJB_BEGIN_ARRAY, NULL);
+        for (int64_t i = 0; i < array->length(); ++i)
+        {
+            datum_to_jsonb(values[i], elemtypinfo.pg.oid, nulls[i], elemtypinfo.outfunc, parseState, WJB_ELEM);
+        }
+        res = pushJsonbValue(&parseState, WJB_END_ARRAY, NULL);
+    }
+    PG_CATCH();
+    {
+        error = true;
+    }
+    PG_END_TRY();
+    if (error)
+        throw std::runtime_error("failed to constuct an jsonb");
+
+    return JsonbPGetDatum(JsonbValueToJsonb(res));
+}
+
 Datum
 ParquetReader::map_to_datum(arrow::MapArray *maparray, int pos,
                             const TypeInfo &typinfo)
 {
 	JsonbParseState *parseState = NULL;
-    JsonbValue *res;
+    JsonbValue *jb;
+    Datum       res;
 
     auto keys = maparray->keys()->Slice(maparray->value_offset(pos),
                                         maparray->value_length(pos));
@@ -562,7 +870,7 @@ ParquetReader::map_to_datum(arrow::MapArray *maparray, int pos,
     Assert(keys->length() == values->length());
     Assert(typinfo.children.size() == 2);
 
-	res = pushJsonbValue(&parseState, WJB_BEGIN_OBJECT, NULL);
+    jb = pushJsonbValue(&parseState, WJB_BEGIN_OBJECT, NULL);
 
     for (int i = 0; i < keys->length(); ++i)
     {
@@ -574,7 +882,7 @@ ParquetReader::map_to_datum(arrow::MapArray *maparray, int pos,
 
         if (keys->IsNull(i))
             throw std::runtime_error("key is null");
-        
+
         if (!values->IsNull(i))
         {
             key = this->read_primitive_type(keys.get(), key_typinfo, i);
@@ -584,14 +892,18 @@ ParquetReader::map_to_datum(arrow::MapArray *maparray, int pos,
 
         /* TODO: adding cstring would be cheaper than adding text */
         datum_to_jsonb(key, key_typinfo.pg.oid, false, key_typinfo.outfunc,
-                       parseState, true);
+                       parseState, WJB_KEY);
         datum_to_jsonb(value, val_typinfo.pg.oid, isnull, val_typinfo.outfunc,
-                       parseState, false);
+                       parseState, WJB_VALUE);
     }
 
-	res = pushJsonbValue(&parseState, WJB_END_OBJECT, NULL);
+    jb = pushJsonbValue(&parseState, WJB_END_OBJECT, NULL);
+    res = JsonbPGetDatum(JsonbValueToJsonb(jb));
 
-    return JsonbPGetDatum(JsonbValueToJsonb(res));
+    if (typinfo.need_cast)
+        res = do_cast(res, typinfo);
+
+    return res;
 }
 
 
@@ -600,27 +912,34 @@ ParquetReader::map_to_datum(arrow::MapArray *maparray, int pos,
  *      Check wether implicit cast will be required and prepare cast function
  *      call.
  */
-FmgrInfo *ParquetReader::find_castfunc(arrow::Type::type src_type,
-                                       Oid dst_type, const char *attname)
+void ParquetReader::initialize_cast(TypeInfo &typinfo, const char *attname)
 {
     MemoryContext ccxt = CurrentMemoryContext;
-    FmgrInfo   *castfunc;
-    Oid         src_oid = to_postgres_type(src_type);
-    Oid         dst_oid = dst_type;
+    Oid         src_oid = to_postgres_type(typinfo.arrow.type_id);
+    Oid         dst_oid = typinfo.pg.oid;
     bool        error = false;
     char        errstr[ERROR_STR_LEN];
+
+    if (!OidIsValid(src_oid))
+    {
+        if (typinfo.arrow.type_id == arrow::Type::MAP)
+            src_oid = JSONBOID;
+        else
+            elog(ERROR, "parquet_s3_fdw: failed to initialize cast function for column '%s'",
+                 attname);
+    }
 
     PG_TRY();
     {
 
         if (IsBinaryCoercible(src_oid, dst_oid))
         {
-            castfunc = nullptr;
+            typinfo.castfunc = nullptr;
         }
         else
         {
-            Oid funcid;
             CoercionPathType ct;
+            Oid     funcid;
 
             ct = find_coercion_pathway(dst_oid, src_oid,
                                        COERCION_EXPLICIT,
@@ -632,20 +951,29 @@ FmgrInfo *ParquetReader::find_castfunc(arrow::Type::type src_type,
                         MemoryContext   oldctx;
 
                         oldctx = MemoryContextSwitchTo(CurTransactionContext);
-                        castfunc = (FmgrInfo *) palloc0(sizeof(FmgrInfo));
-                        fmgr_info(funcid, castfunc);
+                        typinfo.castfunc = (FmgrInfo *) palloc0(sizeof(FmgrInfo));
+                        fmgr_info(funcid, typinfo.castfunc);
+                        typinfo.need_cast = true;
                         MemoryContextSwitchTo(oldctx);
+
                         break;
                     }
+
                 case COERCION_PATH_RELABELTYPE:
-                case COERCION_PATH_COERCEVIAIO:  /* TODO: double check that we
-                                                  * shouldn't do anything here*/
                     /* Cast is not needed */
-                    castfunc = nullptr;
+                    typinfo.castfunc = nullptr;
                     break;
+
+                case COERCION_PATH_COERCEVIAIO:
+                    /* Cast via IO */
+                    typinfo.outfunc = find_outfunc(src_oid);
+                    typinfo.infunc = find_infunc(dst_oid);
+                    typinfo.need_cast = true;
+                    break;
+
                 default:
-                    elog(ERROR, "parquet_s3_fdw: cast function to %s ('%s' column) is not found",
-                         format_type_be(dst_type), attname);
+                    elog(ERROR, "parquet_s3_fdw: coercion pathway from '%s' to '%s' not found",
+                         format_type_be(src_oid), format_type_be(dst_oid));
             }
         }
     }
@@ -664,38 +992,48 @@ FmgrInfo *ParquetReader::find_castfunc(arrow::Type::type src_type,
     }
     PG_END_TRY();
     if (error)
-        throw std::runtime_error(errstr);
-
-    return castfunc;
+        throw Error("failed to initialize cast function for column '%s' (%s)",
+                    attname, errstr);
 }
 
 FmgrInfo *ParquetReader::find_outfunc(Oid typoid)
 {
-    Oid     funcoid;
-    bool    isvarlena;
-    FmgrInfo *outfunc;
-    bool    error(false);
+    MemoryContext oldctx;
+    Oid         funcoid;
+    bool        isvarlena;
+    FmgrInfo   *outfunc;
 
-    PG_TRY();
-    {
-        MemoryContext   oldctx;
+    getTypeOutputInfo(typoid, &funcoid, &isvarlena);
 
-        getTypeOutputInfo(typoid, &funcoid, &isvarlena);
+    if (!OidIsValid(funcoid))
+        elog(ERROR, "parquet_s3_fdw: output function for '%s' not found", format_type_be(typoid));
 
-        oldctx = MemoryContextSwitchTo(CurTransactionContext);
-        outfunc = (FmgrInfo *) palloc0(sizeof(FmgrInfo));
-        fmgr_info(funcoid, outfunc);
-        MemoryContextSwitchTo(oldctx);
-    }
-    PG_CATCH();
-    {
-        error = true;
-    }
-    PG_END_TRY();
-    if (error)
-        throw std::runtime_error("failed to find output function");
+    oldctx = MemoryContextSwitchTo(CurTransactionContext);
+    outfunc = (FmgrInfo *) palloc0(sizeof(FmgrInfo));
+    fmgr_info(funcoid, outfunc);
+    MemoryContextSwitchTo(oldctx);
 
     return outfunc;
+}
+
+FmgrInfo *ParquetReader::find_infunc(Oid typoid)
+{
+    MemoryContext oldctx;
+    Oid         funcoid;
+    Oid         typIOParam;
+    FmgrInfo   *infunc;
+
+    getTypeInputInfo(typoid, &funcoid, &typIOParam);
+
+    if (!OidIsValid(funcoid))
+        elog(ERROR, "parquet_s3_fdw: input function for '%s' not found", format_type_be(typoid));
+
+    oldctx = MemoryContextSwitchTo(CurTransactionContext);
+    infunc = (FmgrInfo *) palloc0(sizeof(FmgrInfo));
+    fmgr_info(funcoid, infunc);
+    MemoryContextSwitchTo(oldctx);
+
+    return infunc;
 }
 
 /*
@@ -740,6 +1078,18 @@ void ParquetReader::set_coordinator(ParallelCoordinator *coord)
     this->coordinator = coord;
 }
 
+void ParquetReader::set_schemaless_info(bool schemaless, std::set<std::string> slcols, std::set<std::string> sorted_cols)
+{
+    this->schemaless = schemaless;
+    this->slcols = slcols;
+    this->sorted_cols = sorted_cols;
+}
+
+std::vector<ParquetReader::preSortedColumnData> ParquetReader::get_current_sorted_cols_data()
+{
+    return this->sorted_cols_data;
+}
+
 class DefaultParquetReader : public ParquetReader
 {
 private:
@@ -780,6 +1130,7 @@ public:
         this->reader_id = reader_id;
         this->coordinator = NULL;
         this->initialized = false;
+        this->schemaless = false;
     }
 
     ~DefaultParquetReader()
@@ -837,18 +1188,15 @@ public:
          * In case of parallel query get the row group index from the
          * coordinator. Otherwise just increment it.
          */
-        if (this->coordinator)
+        if (coordinator)
         {
-            SpinLockAcquire(&this->coordinator->lock);
-
-            /* Did we finish reading from this reader? */
-            if (this->reader_id != (this->coordinator->next_reader - 1)) {
-                SpinLockRelease(&this->coordinator->lock);
+            coordinator->lock();
+            if ((this->row_group = coordinator->next_rowgroup(reader_id)) == -1)
+            {
+                coordinator->unlock();
                 return false;
             }
-            this->row_group = this->coordinator->next_rowgroup++;
-
-            SpinLockRelease(&this->coordinator->lock);
+            coordinator->unlock();
         }
         else
             this->row_group++;
@@ -896,15 +1244,157 @@ public:
         return true;
     }
 
+    /*
+     * Get a record and contruct it to an jsonb value
+     */
+    Jsonb *read_schemaless_column(bool fake=false)
+    {
+        JsonbParseState *jb_pstate = NULL;
+        JsonbValue     *result;
+
+        /* Fill jsonb values */
+        result = pushJsonbValue(&jb_pstate, WJB_BEGIN_OBJECT, NULL);
+
+        for (size_t i = 0; i < this->column_names.size(); i++)
+        {
+            char *key = pstrdup(this->column_names[i].c_str());
+            Datum value = (Datum) 0;
+            bool    isnull = false;
+            ChunkInfo   &chunkInfo = this->chunk_info[i];
+            arrow::Array *array = this->chunks[i];
+            TypeInfo    &typinfo = this->types[i];
+            Oid         value_type = InvalidOid;
+            Oid			typoutput;
+            bool		typIsVarlena;
+            FmgrInfo    finfo;
+            int sorted_col = this->sorted_col_map[i];
+
+            if (chunkInfo.pos >= chunkInfo.len)
+            {
+                const auto &column = this->table->column(chunkInfo.pos);
+
+                /* There are no more chunks */
+                if (++chunkInfo.chunk >= column->num_chunks())
+                    break;
+
+                array = column->chunk(chunkInfo.chunk).get();
+                this->chunks[i] = array;
+                chunkInfo.pos = 0;
+                chunkInfo.len = array->length();
+            }
+
+            /* Don't do actual reading data into slot in fake mode */
+            if (fake)
+                continue;
+
+            if (strlen(key) == 0)
+                throw std::runtime_error("key is null");
+            if (!array->IsNull(chunkInfo.pos))
+            {
+                /* Currently only primitive types, lists and map are supported */
+                switch (typinfo.arrow.type_id)
+                {
+                    case arrow::Type::LIST:
+                    {
+                        arrow::ListArray   *larray = (arrow::ListArray *) array;
+
+                        value = this->nested_list_to_jsonb_datum(larray, chunkInfo.pos,
+                                                    typinfo);
+                        value_type = JSONBOID;
+                        break;
+                    }
+                    case arrow::Type::MAP:
+                    {
+                        arrow::MapArray* maparray = (arrow::MapArray*) array;
+
+                        value = this->map_to_datum(maparray, chunkInfo.pos, typinfo);
+                        value_type = JSONBOID;
+                        break;
+                    }
+                    default:
+                    {
+                        value_type = to_postgres_type(typinfo.arrow.type_id);
+                        value = this->read_primitive_type(array, typinfo, chunkInfo.pos);
+                    }
+                }
+                getTypeOutputInfo(value_type, &typoutput, &typIsVarlena);
+                fmgr_info(typoutput, &finfo);
+                if (sorted_col >= 0)
+                {
+                    this->sorted_cols_data[sorted_col].val = value;
+                    this->sorted_cols_data[sorted_col].is_null = false;
+                }
+            }
+            else
+            {
+                isnull = true;
+                elog(DEBUG2, "key %s is null", key);
+            }
+
+            /* TODO: adding cstring would be cheaper than adding text */
+            push_jsonb_string_key(jb_pstate, key);
+            datum_to_jsonb(value, value_type, isnull, &finfo,
+                        jb_pstate, WJB_VALUE);
+            chunkInfo.pos++;
+        }
+        result = pushJsonbValue(&jb_pstate, WJB_END_OBJECT, NULL);
+
+        return JsonbValueToJsonb(result);
+    }
+
+    /*
+     * schemaless_populate_slot
+     *      Fill slot with the jsonb values made from parquet row.
+     *
+     * If `fake` set to true the actual reading and populating the slot is skipped.
+     * The purpose of this feature is to correctly skip rows to collect sparse
+     * samples.
+     */
+    void schemaless_populate_slot(TupleTableSlot *slot, bool fake=false)
+    {
+        memset(slot->tts_isnull, true, sizeof(bool) * slot->tts_tupleDescriptor->natts);
+        for (int attr = 0; attr < slot->tts_tupleDescriptor->natts; attr++)
+        {
+            Jsonb *result;
+            Form_pg_attribute attr_desc = TupleDescAttr(slot->tts_tupleDescriptor, attr);
+
+            if (attr_desc->attisdropped || attr_desc->atttypid != JSONBOID)
+                continue;
+
+            result = read_schemaless_column(fake);
+
+            /*
+             * Copy jsonb into memory block allocated by
+             * FastAllocator to prevent its destruction though
+             * to be able to recycle it once it fulfilled its
+             * purpose.
+             */
+            void *res = allocator->fast_alloc(VARSIZE_ANY(result));
+            memcpy(res, (Jsonb *) result, VARSIZE_ANY(result));
+            pfree((Jsonb *) result);
+
+            slot->tts_isnull[attr] = false;
+            slot->tts_values[attr] = (Datum) res;
+            break;
+        }
+    }
+
     ReadStatus next(TupleTableSlot *slot, bool fake=false)
     {
         allocator->recycle();
 
         if (this->row >= this->num_rows)
         {
-            /* Read next row group */
-            if (!this->read_next_rowgroup())
-                return RS_EOF;
+            /*
+             * Read next row group. We do it in a loop to skip possibly empty
+             * row groups.
+             */
+            do
+            {
+                if (!this->read_next_rowgroup())
+                    return RS_EOF;
+            }
+            while (!this->num_rows);
         }
 
         this->populate_slot(slot, fake);
@@ -923,6 +1413,11 @@ public:
      */
     void populate_slot(TupleTableSlot *slot, bool fake=false)
     {
+        if (this->schemaless == true)
+        {
+            schemaless_populate_slot(slot, fake);
+            return;
+        }
         /* Fill slot values */
         for (int attr = 0; attr < slot->tts_tupleDescriptor->natts; attr++)
         {
@@ -1026,6 +1521,7 @@ public:
         this->reader_id = reader_id;
         this->coordinator = NULL;
         this->initialized = false;
+        this->schemaless = false;
     }
 
     ~CachingParquetReader()
@@ -1095,16 +1591,13 @@ public:
          */
         if (this->coordinator)
         {
-            SpinLockAcquire(&this->coordinator->lock);
-
-            /* Did we finish reading from this reader? */
-            if (this->reader_id != (this->coordinator->next_reader - 1)) {
-                SpinLockRelease(&this->coordinator->lock);
+            coordinator->lock();
+            if ((this->row_group = coordinator->next_rowgroup(reader_id)) == -1)
+            {
+                coordinator->unlock();
                 return false;
             }
-            this->row_group = this->coordinator->next_rowgroup++;
-
-            SpinLockRelease(&this->coordinator->lock);
+            coordinator->unlock();
         }
         else
             this->row_group++;
@@ -1166,6 +1659,9 @@ public:
             case arrow::Type::BOOL:
                 sz = sizeof(bool);
                 break;
+            case arrow::Type::INT8:
+                sz = sizeof(int8);
+                break;
             case arrow::Type::INT16:
                 sz = sizeof(int16);
                 break;
@@ -1210,6 +1706,12 @@ public:
                             ((bool *) data)[row] = boolarray->Value(row);
                             break;
                         }
+                    case arrow::Type::INT8:
+                        {
+                            arrow::Int8Array *intarray = (arrow::Int8Array *) array;
+                            ((int8 *) data)[row] = intarray->Value(row);
+                            break;
+                        }
                     case arrow::Type::INT16:
                         {
                             arrow::Int16Array *intarray = (arrow::Int16Array *) array;
@@ -1238,6 +1740,24 @@ public:
                     case arrow::Type::LIST:
                         {
                             auto larray = (arrow::ListArray *) array;
+
+                            /* In schemaless mode, read nested list as jsonb array */
+                            if (schemaless == true)
+                            {
+                                Datum jsonb = this->nested_list_to_jsonb_datum(larray, j, typinfo);
+
+                                /*
+                                 * Copy jsonb into memory block allocated by
+                                 * FastAllocator to prevent its destruction though
+                                 * to be able to recycle it once it fulfilled its
+                                 * purpose.
+                                 */
+                                void *res = allocator->fast_alloc(VARSIZE_ANY(jsonb));
+                                memcpy(res, (Jsonb *) jsonb, VARSIZE_ANY(jsonb));
+                                ((Datum *) data)[row] = (Datum) res;
+                                pfree((Jsonb *) jsonb);
+                                break;
+                            }
 
                             ((Datum *) data)[row] =
                                 this->nested_list_to_datum(larray, j, typinfo);
@@ -1279,6 +1799,126 @@ public:
         this->column_data[col] = data;
     }
 
+    Jsonb *read_schemaless_column()
+    {
+        JsonbParseState *jb_pstate = NULL;
+        JsonbValue     *result;
+
+        /* Fill jsonb values */
+        result = pushJsonbValue(&jb_pstate, WJB_BEGIN_OBJECT, NULL);
+
+        for (size_t i = 0; i < this->column_names.size(); i++)
+        {
+            char *key = pstrdup(this->column_names[i].c_str());
+            Datum value = (Datum) 0;
+            bool    isnull = false;
+            Oid			typoutput;
+            bool		typIsVarlena;
+            FmgrInfo    finfo;
+            int         arrow_col = i;
+            TypeInfo &typinfo = this->types[arrow_col];
+            void *data = this->column_data[arrow_col];
+            Oid         value_type =  to_postgres_type(typinfo.arrow.type_id);
+            int sorted_col = this->sorted_col_map[i];
+
+            if (strlen(key) == 0)
+                throw std::runtime_error("key is null");
+            if (!this->column_nulls[arrow_col][this->row])
+            {
+                /* Currently only primitive types and lists are supported */
+                switch (typinfo.arrow.type_id)
+                {
+                    case arrow::Type::BOOL:
+                            value = BoolGetDatum(((bool *) data)[this->row]);
+                            break;
+                        case arrow::Type::INT16:
+                            value = Int16GetDatum(((int16 *) data)[this->row]);
+                            break;
+                        case arrow::Type::INT32:
+                            value = Int32GetDatum(((int32 *) data)[this->row]);
+                            break;
+                        case arrow::Type::FLOAT:
+                            value = Float4GetDatum(((float *) data)[this->row]);
+                            break;
+                        case arrow::Type::DATE32:
+                            {
+                                /*
+                                 * Postgres date starts with 2000-01-01 while unix date (which
+                                 * Parquet is using) starts with 1970-01-01. So we need to do
+                                 * simple calculations here.
+                                 */
+                                int dt = ((int *) data)[this->row]
+                                    + (UNIX_EPOCH_JDATE - POSTGRES_EPOCH_JDATE);
+                                value = DateADTGetDatum(dt);
+                            }
+                            break;
+                        case arrow::Type::LIST:
+                        case arrow::Type::MAP:
+                            {
+                                value = ((Datum *) data)[this->row];
+                                value_type = JSONBOID;
+                                break;
+                            }
+                        default:
+                            value = ((Datum *) data)[this->row];
+                }
+                getTypeOutputInfo(value_type, &typoutput, &typIsVarlena);
+                fmgr_info(typoutput, &finfo);
+            }
+            else
+            {
+                isnull = true;
+                elog(DEBUG2, "key %s is null", key);
+            }
+
+            /* TODO: adding cstring would be cheaper than adding text */
+            push_jsonb_string_key(jb_pstate, key);
+            datum_to_jsonb(value, value_type, isnull, &finfo,
+                        jb_pstate, WJB_VALUE);
+            if (sorted_col >= 0)
+            {
+                this->sorted_cols_data[i].val = value;
+                this->sorted_cols_data[i].is_null = false;
+            }
+        }
+        result = pushJsonbValue(&jb_pstate, WJB_END_OBJECT, NULL);
+
+        return JsonbValueToJsonb(result);
+    }
+
+    void schemaless_populate_slot(TupleTableSlot *slot, bool fake=false)
+    {
+        memset(slot->tts_isnull, true, sizeof(bool) * slot->tts_tupleDescriptor->natts);
+
+        /* Fill the first jsonb column */
+        for (int attr = 0; attr < slot->tts_tupleDescriptor->natts; attr++)
+        {
+            Jsonb *result;
+            Form_pg_attribute attr_desc = TupleDescAttr(slot->tts_tupleDescriptor, attr);
+
+            if (attr_desc->attisdropped || attr_desc->atttypid != JSONBOID)
+                continue;
+
+            result = read_schemaless_column();
+
+            /*
+             * Copy jsonb into memory block allocated by
+             * FastAllocator to prevent its destruction though
+             * to be able to recycle it once it fulfilled its
+             * purpose.
+             */
+            void *res = allocator->fast_alloc(VARSIZE_ANY(result));
+            memcpy(res, (Jsonb *) result, VARSIZE_ANY(result));
+            pfree((Jsonb *) result);
+
+            slot->tts_isnull[attr] = false;
+            slot->tts_values[attr] = (Datum) res;
+            break;
+        }
+
+        this->row++;
+    }
+
     ReadStatus next(TupleTableSlot *slot, bool fake=false)
     {
         if (this->row >= this->num_rows)
@@ -1286,9 +1926,16 @@ public:
             if (!is_active)
                 return RS_INACTIVE;
 
-            /* Read next row group */
-            if (!this->read_next_rowgroup())
-                return RS_EOF;
+            /*
+             * Read next row group. We do it in a loop to skip possibly empty
+             * row groups.
+             */
+            do
+            {
+                if (!this->read_next_rowgroup())
+                    return RS_EOF;
+            }
+            while (!this->num_rows);
         }
 
         if (!fake)
@@ -1300,6 +1947,12 @@ public:
     void populate_slot(TupleTableSlot *slot, bool fake=false)
     {
         /* Fill slot values */
+        if (this->schemaless == true)
+        {
+            schemaless_populate_slot(slot, fake);
+            return;
+        }
+
         for (int attr = 0; attr < slot->tts_tupleDescriptor->natts; attr++)
         {
             int arrow_col = this->map[attr];
@@ -1310,12 +1963,16 @@ public:
             if (arrow_col >= 0)
             {
                 TypeInfo &typinfo = this->types[arrow_col];
-                void *data = this->column_data[arrow_col];
+                void     *data = this->column_data[arrow_col];
+                bool      need_cast = typinfo.need_cast;
 
                 switch(typinfo.arrow.type_id)
                 {
                     case arrow::Type::BOOL:
                         slot->tts_values[attr] = BoolGetDatum(((bool *) data)[this->row]);
+                        break;
+                    case arrow::Type::INT8:
+                        slot->tts_values[attr] = Int8GetDatum(((int8 *) data)[this->row]);
                         break;
                     case arrow::Type::INT16:
                         slot->tts_values[attr] = Int16GetDatum(((int16 *) data)[this->row]);
@@ -1340,7 +1997,11 @@ public:
                         break;
                     default:
                         slot->tts_values[attr] = ((Datum *) data)[this->row];
+                        need_cast = false;
                 }
+
+                if (need_cast)
+                    slot->tts_values[attr] = do_cast(slot->tts_values[attr], typinfo);
                 slot->tts_isnull[attr] = this->column_nulls[arrow_col][this->row];
             }
             else
