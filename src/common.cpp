@@ -63,6 +63,7 @@ to_postgres_type(int arrow_type)
     {
         case arrow::Type::BOOL:
             return BOOLOID;
+        case arrow::Type::INT8:
         case arrow::Type::INT16:
             return INT2OID;
         case arrow::Type::INT32:
@@ -92,12 +93,14 @@ to_postgres_type(int arrow_type)
  *      plain bytes to postgres Datum.
  */
 Datum
-bytes_to_postgres_type(const char *bytes, arrow::DataType *arrow_type)
+bytes_to_postgres_type(const char *bytes, Size len, const arrow::DataType *arrow_type)
 {
     switch(arrow_type->id())
     {
         case arrow::Type::BOOL:
             return BoolGetDatum(*(bool *) bytes);
+        case arrow::Type::INT8:
+            return Int16GetDatum(*(int8 *) bytes);
         case arrow::Type::INT16:
             return Int16GetDatum(*(int16 *) bytes);
         case arrow::Type::INT32:
@@ -109,8 +112,9 @@ bytes_to_postgres_type(const char *bytes, arrow::DataType *arrow_type)
         case arrow::Type::DOUBLE:
             return Float8GetDatum(*(double *) bytes);
         case arrow::Type::STRING:
-        case arrow::Type::BINARY:
             return CStringGetTextDatum(bytes);
+        case arrow::Type::BINARY:
+            return PointerGetDatum(cstring_to_text_with_len(bytes, len));
         case arrow::Type::TIMESTAMP:
             {
                 TimestampTz ts;
@@ -128,6 +132,25 @@ bytes_to_postgres_type(const char *bytes, arrow::DataType *arrow_type)
     }
 }
 
+/*
+ * XXX Currently only supports ascii strings
+ */
+char *
+tolowercase(const char *input, char *output)
+{
+    int i = 0;
+
+    Assert(strlen(input) < NAMEDATALEN - 1);
+
+    do
+    {
+        output[i] = tolower(input[i]);
+    }
+    while (input[i++]);
+
+    return output;
+}
+
 arrow::Type::type
 get_arrow_list_elem_type(arrow::DataType *type)
 {
@@ -138,15 +161,19 @@ get_arrow_list_elem_type(arrow::DataType *type)
 }
 
 void datum_to_jsonb(Datum value, Oid typoid, bool isnull, FmgrInfo *outfunc,
-                    JsonbParseState *parseState, bool iskey)
+                    JsonbParseState *parseState, JsonbIteratorToken seq)
 {
     JsonbValue  jb;
+    bool        iskey = false;
+
+    if (seq == WJB_KEY)
+        iskey = true;
 
     if (isnull)
     {
         Assert(!iskey);
         jb.type = jbvNull;
-        pushJsonbValue(&parseState, WJB_VALUE, &jb);
+        pushJsonbValue(&parseState, seq, &jb);
         return;
     }
     switch (typoid)
@@ -203,6 +230,15 @@ void datum_to_jsonb(Datum value, Oid typoid, bool isnull, FmgrInfo *outfunc,
             jb.val.string.val = str;
             break;
         }
+        case JSONBOID:
+        {
+            Jsonb   *jsonb = DatumGetJsonbP(value);
+
+            jb.type = jbvBinary;
+            jb.val.binary.data = &jsonb->root;
+            jb.val.binary.len = VARSIZE(jsonb) - VARHDRSZ;
+            break;
+        }
         default:
         {
             char    *strval;
@@ -215,6 +251,19 @@ void datum_to_jsonb(Datum value, Oid typoid, bool isnull, FmgrInfo *outfunc,
         }
     }
 
-    pushJsonbValue(&parseState, iskey ? WJB_KEY : WJB_VALUE, &jb);
+    pushJsonbValue(&parseState, seq, &jb);
 }
 
+/*
+ * Push jsonb key as string value.
+ */
+void push_jsonb_string_key(JsonbParseState *parseState, char *key_name)
+{
+    JsonbValue  jb;
+
+    jb.type = jbvString;
+    jb.val.string.len = strlen(key_name);
+    jb.val.string.val = key_name;
+
+    pushJsonbValue(&parseState, WJB_KEY, &jb);
+}

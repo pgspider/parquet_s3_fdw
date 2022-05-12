@@ -52,6 +52,7 @@ Now you should be able to create foreign table from Parquet files. Currently `pa
 
 |   Arrow type |  SQL type |
 |-------------:|----------:|
+|         INT8 |      INT2 |
 |        INT16 |      INT2 |
 |        INT32 |      INT4 |
 |        INT64 |      INT8 |
@@ -70,6 +71,7 @@ Following options are supported:
 * **filename** - space separated list of paths to Parquet files to read. You can specify the path on AWS S3 by starting with `s3://`. The mix of local path and S3 path is not supported;
 * **dirname** - path to directory having Parquet files to read;
 * **sorted** - space separated list of columns that Parquet files are presorted by; that would help postgres to avoid redundant sorting when running query with `ORDER BY` clause or in other cases when having a presorted set is beneficial (Group Aggregate, Merge Join);
+* **files_in_order** - specifies that files specified by `filename` or returned by `files_func` are ordered according to `sorted` option and have no intersection rangewise; this allows to use `Gather Merge` node on top of parallel Multifile scan (default `false`);
 * **use_mmap** - whether memory map operations will be used instead of file read operations (default `false`);
 * **use_threads** - enables Apache Arrow's parallel columns decoding/decompression (default `false`);
 * **files_func** - user defined function that is used by parquet_s3_fdw to retrieve the list of parquet files on each query; function must take one `JSONB` argument and return text array of full paths to parquet files;
@@ -86,7 +88,9 @@ Foreign table may be created for a single Parquet file and for a set of files. I
 | **Caching Multifile Merge** | Same as `Multifile Merge`, but keeps the number of simultaneously open files limited; used when the number of specified Parquet files exceeds `max_open_files` |
 
 GUC variables:
-* **parquet_fdw.use_threads** - global switch that allow user to enable or disable threads (default `true`).
+* **parquet_fdw.use_threads** - global switch that allow user to enable or disable threads (default `true`);
+* **parquet_fdw.enable_multifile** - enable Multifile reader (default `true`).
+* **parquet_fdw.enable_multifile_merge** - enable Multifile Merge reader (default `true`).
 
 Example:
 ```sql
@@ -107,7 +111,7 @@ SELECT * FROM userdata;
 ```
 
 ## Parallel queries
-`parquet_s3_fdw` also supports [parallel query execution](https://www.postgresql.org/docs/current/parallel-query.html) (not to confuse with multi-threaded decoding feature of Apache Arrow). It is disabled by default; to enable it run `ANALYZE` command on the table. The reason behind this is that without statistics postgres may end up choosing a terrible parallel plan for certain queries which would be much worse than a serial one (e.g. grouping by a column with large number of distinct values).
+`parquet_s3_fdw` also supports [parallel query execution](https://www.postgresql.org/docs/current/parallel-query.html) (not to confuse with multi-threaded decoding feature of Apache Arrow).
 
 ## Import
 `parquet_s3_fdw` also supports [`IMPORT FOREIGN SCHEMA`](https://www.postgresql.org/docs/current/sql-importforeignschema.html) command to discover parquet files in the specified directory on filesystem and create foreign tables according to those files. It can be used as follows:
@@ -176,6 +180,124 @@ SELECT import_parquet_s3_explicit(
 - Allow control over whether foreign servers keep connections open after transaction completion. This is controlled by keep_connections and defaults to on.
 - Support parquet_s3_fdw function parquet_s3_fdw_get_connections() to report open foreign server connections.
 
+## Schemaless mode
+- The feature will enable user to use schemaless feature:
+  - No specific foreign foreign schema (column difinition) for each parquet file.
+  - The schemaless foreign table has only one jsonb column to represent the data from the parquet file by following rule:
+    - Jsonb Key: parquet column name.
+    - Jsonb Value: parquet column data.
+- By use schemaless mode, there are several benefits:
+  - Flexibility over data structure of parquet file: By merging all column data into one jsonb column, a schemaless foreign table can query any parquet file that has all column can be mapped with the postgres type.
+  - No pre-defined foreign table schemas (column difinition). The lack of schema means that foreign table will query all column from parquet file — including those that user do not yet use.
+
+### Schemaless mode usage
+- Schemaless mode is enabled by `schemaless` option:
+  - `schemaless` option is `true`: enable schemaless mode.
+  - `schemaless` option is `false`: disable schemaless mode (We call it `non-schemaless` mode).
+  - If `schemaless` option is not configured, default value is false.
+  - `schemaless` option is supported in `CREATE FOREIGN TABLE`, `IMPORT FOREIGN SCHEMA`, `import_parquet_s3()` and `import_parquet_s3_explicit()`.
+- Schemaless foreign table needs at least one jsonb column to represent data:
+  - If there is more than 1 jsonb column, only one column is populated, all other columns are treated with NULL value.
+  - If there is no jsonb column, all column are treated with NULL value.
+  - Example:
+    ```sql
+    CREATE FOREIGN TABLE example_schemaless (
+      id int,
+      v jsonb
+    ) OPTIONS (filename '/path/to/parquet_file', schemaless 'true');
+    SELECT * FROM example_schemaless;
+    id |                                                                v                                                                
+    ----+---------------------------------------------------------------------------------------------------------------------------------
+        | {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
+        | {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
+    (2 rows)
+    ```
+- Create foreign table:
+  With  `IMPORT FOREIGN SCHEMA`, `import_parquet_s3()` and `import_parquet_s3_explicit()`, foreign table will create with fixed column difinition like below:
+  ```sql
+  CREATE FOREIGN TABLE example (
+    v jsonb
+  ) OPTIONS (filename '/path/to/parquet_file', schemaless 'true');
+  ```
+- Query data:
+  ```sql
+  -- non-schemaless mode
+  SELECT * FROM example;
+   one |    two     | three |        four         |    five    | six | seven 
+  -----+------------+-------+---------------------+------------+-----+-------
+     1 | {1,2,3}    | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
+     2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00 | 2018-01-02 | f   |      
+  (2 rows)
+  -- schemaless mode
+  SELECT * FROM example_schemaless;
+                                                                    v
+  ---------------------------------------------------------------------------------------------------------------------------------
+   {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
+   {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
+  (2 rows)
+  ```
+
+- Fetch values in jsonb expression:  
+  - Use `->>` jsonb arrow operator which return text type. User may cast type the jsonb expression to get corresponding data representation.  
+  - For example, `v->>'col'` expression of fetch value `col` will be column name `col` in parquet file and we call it `schemaless variable` or `slvar`.  
+    ```sql
+    SELECT v->>'two', sqrt((v->>'one')::int) FROM example_schemaless;
+      ?column?   |        sqrt        
+    --------------+--------------------
+    [1, 2, 3]    |                  1
+    [null, 5, 6] | 1.4142135623730951
+    (2 rows)
+    ```
+
+- Some feature is different with `non-schemaless` mode
+  - Rowgroup filter support: in schemaless mode, parquet_s3_fdw can support execute row group filter with some `WHERE` condition below:
+    - `slvar::type {operator} const`. For example: `(v->>'int64_col')::int8 = 100`
+    - `const {operator} slvar ::type`. For example: `100 = (v->>'int64_col')::int8`
+    - `slvar::boolean is true/false`. For example: `(v->>'bool_col')::boolean is false`
+    - `!(slvar::boolean)`. For example: `!(v->>'bool_col')::boolean`
+    - Jsonb `exist` operator: `((v->>'col')::jsonb) ? element`, `(v->'col') ? element` and `v ? 'col'`
+    - The cast function must be mapped with the parquet column type, otherwise, the filter will be skipped.
+  - To use presort column of parquet file, user must be:
+    - define column name in `sorted` option same as `non-schemaless mode`
+    - Use `slvar` instead of column name in the `ORDER BY` clause.
+    - If the sorted parquet column is not a text column, please add the explicit cast to the mapped type of this column.
+    - For example:
+      ```sql
+      CREATE FOREIGN TABLE example_sorted (v jsonb)
+      SERVER parquet_s3_srv
+      OPTIONS (filename '/path/to/example1.parquet /path/to/example2.parquet', sorted 'int64_col', schemaless 'true');
+      EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY (v->>'int64_col')::int8;
+                QUERY PLAN           
+      --------------------------------
+      Foreign Scan on example_sorted
+        Reader: Multifile Merge
+        Row groups: 
+          example1.parquet: 1, 2
+          example2.parquet: 1
+      (5 rows)
+      ```
+  - Support for arrow Nested List and Map: these type will be treated as nested jsonb value which can access by `->` operator.  
+  For example:
+    ```sql
+    SELECT * FROM example_schemaless;
+                                      v
+    ----------------------------------------------------------------------------
+    {"array_col": [19, 20], "jsonb_col": {"1": "foo", "2": "bar", "3": "baz"}}
+    {"array_col": [21, 22], "jsonb_col": {"4": "test1", "5": "test2"}}
+    (2 rows)
+
+    SELECT v->'array_col'->1, v->'jsonb_col'->'1' FROM example3;
+    ?column? | ?column? 
+    ----------+----------
+    20       | "foo"
+    22       | 
+    (2 rows)
+    ```
+
+  - Postgres cost for caculate `(jsonb->>'col')::type` is much larger than fetch column directly in `non-schemaless` mode, The query plan of `schemaless` mode can be different with `non-schemaless` mode in some complex query.
+
+- For other feature, `schemaless` mode works same as `non-schemaless` mode.
+
 ## Limitations
 - Modification (INSERT, UPDATE and DELETE) is not supported.
 - Transaction is not supported.
@@ -192,6 +314,15 @@ Example:
      (102,,00102,,,,)       
     (2 rows) 
     ```  
+
+- The 4th and 5th arguments of `import_parquet_s3_explicit()` function are meaningless in `schemaless` mode.
+  - These arguments should be defined as `NULL` value.
+  - If these arguments is not NULL value the `WARNING` below will occur:
+    ```
+    WARNING: parquet_s3_fdw: attnames and atttypes are expected to be NULL. They are meaningless for schemaless table.
+    HINT: Schemaless table imported always contain "v" column with "jsonb" type.
+    ```
+- `schemaless` mode does not support create partition table by `CREATE TABLE parent_tbl (v jsonb) PARTITION BY RANGE((v->>'a')::int)`.
 
 ## Contributing
 Opening issues and pull requests on GitHub are welcome.

@@ -214,11 +214,6 @@ SELECT * FROM example_sorted_caching ORDER BY one;
 -- parallel execution
 SET parallel_setup_cost = 0;
 SET parallel_tuple_cost = 0.001;
-SET cpu_operator_cost = 0.000025;
-ANALYZE example_seq;
-ANALYZE example_sorted;
-ANALYZE example1;
---Testcase 55:
 EXPLAIN (COSTS OFF) SELECT * FROM example_seq;
 --Testcase 56:
 EXPLAIN (COSTS OFF) SELECT * FROM example_seq ORDER BY one;
@@ -230,6 +225,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM example_sorted;
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY one;
 --Testcase 60:
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY two;
+ALTER FOREIGN TABLE example_sorted OPTIONS (ADD files_in_order 'true');
+EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY one;
 --Testcase 61:
 EXPLAIN (COSTS OFF) SELECT * FROM example1;
 --Testcase 62:
@@ -267,6 +264,9 @@ OPTIONS (filename :'var', sorted 'one');
 SELECT * FROM example3;
 --Testcase 68:
 SELECT * FROM example3 WHERE three = 3;
+
+-- analyze
+ANALYZE example_sorted;
 
 SET client_min_messages = WARNING;
 

@@ -41,17 +41,46 @@
         if (error) { throw std::runtime_error(err); } \
     } while(0)
 
+
+class TrivialExecutionStateS3 : public ParquetS3FdwExecutionState
+{
+public:
+    bool next(TupleTableSlot *, bool)
+    {
+        return false;
+    }
+    void rescan(void) {}
+    void add_file(const char *, List *)
+    {
+        Assert(false && "add_file is not supported for TrivialExecutionStateS3");
+    }
+    void set_coordinator(ParallelCoordinator *) {}
+    Size estimate_coord_size() 
+    {
+        Assert(false && "estimate_coord_size is not supported for TrivialExecutionStateS3");
+    }
+    void init_coord()
+    {
+        Assert(false && "init_coord is not supported for TrivialExecutionStateS3");
+    }
+};
+
+
 class SingleFileExecutionStateS3 : public ParquetS3FdwExecutionState
 {
 private:
     ParquetReader      *reader;
     MemoryContext       cxt;
+    ParallelCoordinator *coord;
     TupleDesc           tuple_desc;
     std::set<int>       attrs_used;
     bool                use_mmap;
     bool                use_threads;
     const char *dirname;
     Aws::S3::S3Client *s3_client;
+    bool                schemaless;
+    std::set<std::string> slcols;
+    std::set<std::string> sorted_cols;
 
 public:
     MemoryContext       estate_cxt;
@@ -62,10 +91,14 @@ public:
                              TupleDesc tuple_desc,
                              std::set<int> attrs_used,
                              bool use_threads,
-                             bool use_mmap)
+                             bool use_mmap,
+                             bool schemaless,
+                             std::set<std::string> slcols,
+                             std::set<std::string> sorted_cols)
         : cxt(cxt), tuple_desc(tuple_desc), attrs_used(attrs_used),
           use_mmap(use_mmap), use_threads(use_threads),
-          dirname(dirname), s3_client(s3_client)
+          dirname(dirname), s3_client(s3_client), schemaless(schemaless),
+          slcols(slcols), sorted_cols(sorted_cols)
     { }
 
     ~SingleFileExecutionStateS3()
@@ -76,12 +109,12 @@ public:
 
     bool next(TupleTableSlot *slot, bool fake)
     {
-        bool res;
+        ReadStatus res;
 
         if ((res = reader->next(slot, fake)) == RS_SUCCESS)
             ExecStoreVirtualTuple(slot);
 
-        return res;
+        return res == RS_SUCCESS;
     }
 
     void rescan(void)
@@ -104,13 +137,26 @@ public:
             reader->open(dirname, s3_client);
         else
             reader->open();
+        reader->set_schemaless_info(schemaless, slcols, sorted_cols);
         reader->create_column_mapping(tuple_desc, attrs_used);
     }
 
     void set_coordinator(ParallelCoordinator *coord)
     {
+        this->coord = coord;
+
         if (reader)
             reader->set_coordinator(coord);
+    }
+
+    Size estimate_coord_size()
+    {
+        return sizeof(ParallelCoordinator);
+    }
+
+    void init_coord()
+    {
+        coord->init_single(NULL, 0);
     }
 };
 
@@ -123,7 +169,7 @@ private:
         std::vector<int>    rowgroups;
     };
 private:
-    ParquetReader       *reader;
+    ParquetReader          *reader;
 
     std::vector<FileRowgroups> files;
     uint64_t                cur_reader;
@@ -135,8 +181,11 @@ private:
     bool                    use_mmap;
 
     ParallelCoordinator    *coord;
-    const char *dirname;
-    Aws::S3::S3Client *s3_client;
+    const char             *dirname;
+    Aws::S3::S3Client      *s3_client;
+    bool                    schemaless;
+    std::set<std::string>   slcols;
+    std::set<std::string>   sorted_cols;
 
 private:
     ParquetReader *get_next_reader()
@@ -145,28 +194,12 @@ private:
 
         if (coord)
         {
-            int32 reader_id;
-
-            SpinLockAcquire(&coord->lock);
-
-            /* 
-             * First let's check if the file other workers are reading has more
-             * rowgroups to read
-             */
-            reader_id = coord->next_reader - 1;
-            if (reader_id >= 0 && reader_id < (int) files.size()
-                && (int) files[reader_id].rowgroups.size() > coord->next_rowgroup) {
-                /* yep */;
-            } else {
-                /* If that's not the case then open the next file */
-                reader_id = coord->next_reader++;
-                coord->next_rowgroup = 0;
-            }
-            this->cur_reader = reader_id;
-            SpinLockRelease(&coord->lock);
+            coord->lock();
+            cur_reader = coord->next_reader();
+            coord->unlock();
         }
 
-        if (cur_reader >= files.size())
+        if (cur_reader >= files.size() || cur_reader < 0)
             return NULL;
 
         r = create_parquet_reader(files[cur_reader].filename.c_str(), cxt, cur_reader);
@@ -177,6 +210,7 @@ private:
             r->open(dirname, s3_client);
         else
             r->open();
+        r->set_schemaless_info(schemaless, slcols, sorted_cols);
         r->create_column_mapping(tuple_desc, attrs_used);
 
         cur_reader++;
@@ -191,10 +225,14 @@ public:
                             TupleDesc tuple_desc,
                             std::set<int> attrs_used,
                             bool use_threads,
-                            bool use_mmap)
+                            bool use_mmap,
+                            bool schemaless,
+                            std::set<std::string> slcols,
+                            std::set<std::string> sorted_cols)
         : reader(NULL), cur_reader(0), cxt(cxt), tuple_desc(tuple_desc),
           attrs_used(attrs_used), use_threads(use_threads), use_mmap(use_mmap),
-          coord(NULL), dirname(dirname), s3_client(s3_client)
+          coord(NULL), dirname(dirname), s3_client(s3_client), schemaless(schemaless),
+          slcols(slcols), sorted_cols(sorted_cols)
     { }
 
     ~MultifileExecutionStateS3()
@@ -264,6 +302,24 @@ public:
     {
         this->coord = coord;
     }
+
+    Size estimate_coord_size()
+    {
+        return sizeof(ParallelCoordinator) + sizeof(int32) * files.size();
+    }
+
+    void init_coord()
+    {
+        ParallelCoordinator *coord = (ParallelCoordinator *) this->coord;
+        int32  *nrowgroups;
+        int     i = 0;
+
+        nrowgroups = (int32 *) palloc(sizeof(int32) * files.size());
+        for (auto &file : files)
+            nrowgroups[i++] = file.rowgroups.size();
+        coord->init_single(nrowgroups, files.size());
+        pfree(nrowgroups);
+    }
 };
 
 class MultifileMergeExecutionStateBaseS3 : public ParquetS3FdwExecutionState
@@ -284,6 +340,7 @@ protected:
     std::list<SortSupportData> sort_keys;
     bool                use_threads;
     bool                use_mmap;
+    ParallelCoordinator *coord;
 
     /*
      * Heap is used to store tuples in prioritized manner along with file
@@ -297,7 +354,9 @@ protected:
     bool                slots_initialized;
     const char         *dirname;
     Aws::S3::S3Client  *s3_client;
-
+    bool                schemaless;
+    std::set<std::string> slcols;
+    std::set<std::string> sorted_cols;
 protected:
     /*
      * compare_slots
@@ -322,8 +381,27 @@ protected:
                         isNull2;
             int         compare;
 
-            datum1 = slot_getattr(s1, attno, &isNull1);
-            datum2 = slot_getattr(s2, attno, &isNull2);
+            /*
+             * In schemaless mode, presorted column data available on each reader.
+             * TupleTableSlot just have a jsonb column.
+             */
+            if (this->schemaless)
+            {
+                auto reader_a = readers[a.reader_id];
+                auto reader_b = readers[b.reader_id];
+                std::vector<ParquetReader::preSortedColumnData> sorted_cols_data_a = reader_a->get_current_sorted_cols_data();
+                std::vector<ParquetReader::preSortedColumnData> sorted_cols_data_b = reader_b->get_current_sorted_cols_data();
+
+                datum1 = sorted_cols_data_a[attno].val;
+                isNull1 = sorted_cols_data_a[attno].is_null;
+                datum2 = sorted_cols_data_b[attno].val;
+                isNull2 = sorted_cols_data_b[attno].is_null;
+            }
+            else
+            {
+                datum1 = slot_getattr(s1, attno, &isNull1);
+                datum2 = slot_getattr(s2, attno, &isNull2);
+            }
 
             compare = ApplySortComparator(datum1, isNull1,
                                           datum2, isNull2,
@@ -333,6 +411,46 @@ protected:
         }
 
         return false;
+    }
+
+    void set_coordinator(ParallelCoordinator *coord)
+    {
+        this->coord = coord;
+        for (auto reader : readers)
+            reader->set_coordinator(coord);
+    }
+
+    Size estimate_coord_size()
+    {
+        return sizeof(ParallelCoordinator) + readers.size() * sizeof(int32);
+    }
+
+    void init_coord()
+    {
+        coord->init_multi(readers.size());
+    }
+
+    /*
+     * get_schemaless_sortkeys
+     *      - Get sorkeys list from reader list.
+     *      - The sorkey is create when create column mapping on each reader
+     */
+    void get_schemaless_sortkeys()
+    {
+        this->sort_keys.clear();
+        for (size_t i = 0; i < this->sorted_cols.size(); i++)
+        {
+            /* load sort key from all reader */
+            for (auto reader: readers)
+            {
+                ParquetReader::preSortedColumnData sd = reader->get_current_sorted_cols_data()[i];
+                if (sd.is_available)
+                {
+                    this->sort_keys.push_back(sd.sortkey);
+                    break;
+                }
+            }
+        }
     }
 };
 
@@ -372,6 +490,8 @@ private:
             }
             ++i;
         }
+        if (this->schemaless)
+            get_schemaless_sortkeys();
         PG_TRY_INLINE({ slots.heapify(); }, "heapify failed");
         slots_initialized = true;
     }
@@ -384,7 +504,10 @@ public:
                                  std::set<int> attrs_used,
                                  std::list<SortSupportData> sort_keys,
                                  bool use_threads,
-                                 bool use_mmap)
+                                 bool use_mmap,
+                                 bool schemaless,
+                                 std::set<std::string> slcols,
+                                 std::set<std::string> sorted_cols)
     {
         this->cxt = cxt;
         this->tuple_desc = tuple_desc;
@@ -395,6 +518,9 @@ public:
         this->use_threads = use_threads;
         this->use_mmap = use_mmap;
         this->slots_initialized = false;
+        this->schemaless = schemaless;
+        this->slcols = slcols;
+        this->sorted_cols = sorted_cols;
     }
 
     ~MultifileMergeExecutionStateS3()
@@ -467,24 +593,21 @@ public:
         ParquetReader *r;
         ListCell           *lc;
         std::vector<int>    rg;
+        int32_t             reader_id = readers.size();
 
         foreach (lc, rowgroups)
             rg.push_back(lfirst_int(lc));
 
-        r = create_parquet_reader(filename, cxt);
+        r = create_parquet_reader(filename, cxt, reader_id);
         r->set_rowgroups_list(rg);
         r->set_options(use_threads, use_mmap);
         if (s3_client)
             r->open(dirname, s3_client);
         else
             r->open();
+        r->set_schemaless_info(schemaless, slcols, sorted_cols);
         r->create_column_mapping(tuple_desc, attrs_used);
         readers.push_back(r);
-    }
-
-    void set_coordinator(ParallelCoordinator * /* coord */)
-    {
-        Assert(true);   /* not supported, should never happen */
     }
 };
 
@@ -534,6 +657,7 @@ private:
             );
 
             activate_reader(reader);
+            reader->set_schemaless_info(schemaless, slcols, sorted_cols);
             reader->create_column_mapping(tuple_desc, attrs_used);
 
             if (reader->next(rs.slot) == RS_SUCCESS)
@@ -544,6 +668,8 @@ private:
             }
             ++i;
         }
+        if (this->schemaless)
+            get_schemaless_sortkeys();
         PG_TRY_INLINE({ slots.heapify(); }, "heapify failed");
         slots_initialized = true;
     }
@@ -606,7 +732,10 @@ public:
                                         std::list<SortSupportData> sort_keys,
                                         bool use_threads,
                                         bool use_mmap,
-                                        int max_open_files)
+                                        int max_open_files,
+                                        bool schemaless,
+                                        std::set<std::string> slcols,
+                                        std::set<std::string> sorted_cols)
         : num_active_readers(0), max_open_files(max_open_files)
     {
         this->cxt = cxt;
@@ -618,6 +747,9 @@ public:
         this->use_threads = use_threads;
         this->use_mmap = use_mmap;
         this->slots_initialized = false;
+        this->schemaless = schemaless;
+        this->slcols = slcols;
+        this->sorted_cols = sorted_cols;
     }
 
     ~CachingMultifileMergeExecutionStateS3()
@@ -713,7 +845,7 @@ public:
 
     void set_coordinator(ParallelCoordinator * /* coord */)
     {
-        Assert(true);   /* not supported, should never happen */
+        Assert(false);  /* not supported, should never happen */
     }
 };
 
@@ -726,27 +858,32 @@ ParquetS3FdwExecutionState *create_parquet_execution_state(ReaderType reader_typ
                                                          std::list<SortSupportData> sort_keys,
                                                          bool use_threads,
                                                          bool use_mmap,
-                                                         int32_t max_open_files)
+                                                         int32_t max_open_files,
+                                                         bool schemaless,
+                                                         std::set<std::string> slcols,
+                                                         std::set<std::string> sorted_cols)
 {
     switch (reader_type)
     {
+        case RT_TRIVIAL:
+            return new TrivialExecutionStateS3();
         case RT_SINGLE:
             return new SingleFileExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc,
                                                          attrs_used, use_threads,
-                                                         use_mmap);
+                                                         use_mmap, schemaless, slcols, sorted_cols);
         case RT_MULTI:
             return new MultifileExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc,
                                                         attrs_used, use_threads,
-                                                        use_mmap);
+                                                        use_mmap, schemaless, slcols, sorted_cols);
         case RT_MULTI_MERGE:
             return new MultifileMergeExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc,
-                                                             attrs_used, sort_keys, 
-                                                             use_threads, use_mmap);
+                                                        attrs_used, sort_keys, 
+                                                        use_threads, use_mmap, schemaless, slcols, sorted_cols);
         case RT_CACHING_MULTI_MERGE:
             return new CachingMultifileMergeExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc,
                                                            attrs_used, sort_keys, 
                                                            use_threads, use_mmap,
-                                                           max_open_files);
+                                                           max_open_files, schemaless, slcols, sorted_cols);
         default:
             throw std::runtime_error("unknown reader type");
     }

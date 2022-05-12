@@ -36,6 +36,7 @@
 #include "exec_state.hpp"
 #include "reader.hpp"
 #include "common.hpp"
+#include "slvars.hpp"
 
 extern "C"
 {
@@ -48,6 +49,7 @@ extern "C"
 #include "access/reloptions.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_collation.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
 #include "executor/spi.h"
@@ -58,6 +60,7 @@ extern "C"
 #include "nodes/execnodes.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/makefuncs.h"
+#include "nodes/parsenodes.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
@@ -65,8 +68,8 @@ extern "C"
 #include "optimizer/restrictinfo.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_func.h"
-#include "parser/parse_oper.h"
 #include "parser/parse_type.h"
+#include "parser/parsetree.h"
 #include "utils/builtins.h"
 #include "utils/jsonb.h"
 #include "utils/lsyscache.h"
@@ -85,6 +88,12 @@ extern "C"
 #include "access/relation.h"
 #include "optimizer/optimizer.h"
 #endif
+
+#if PG_VERSION_NUM < 110000
+#include "catalog/pg_am.h"
+#else
+#include "catalog/pg_am_d.h"
+#endif
 }
 
 
@@ -94,6 +103,10 @@ extern "C"
 #if PG_VERSION_NUM < 110000
 #define PG_GETARG_JSONB_P PG_GETARG_JSONB
 #endif
+
+
+bool enable_multifile;
+bool enable_multifile_merge;
 
 
 static void find_cmp_func(FmgrInfo *finfo, Oid type1, Oid type2);
@@ -106,8 +119,13 @@ static void destroy_parquet_state(void *arg);
 struct RowGroupFilter
 {
     AttrNumber  attnum;
-    Const       *value;
+    bool        is_key; /* for maps */
+    Const      *value;
     int         strategy;
+    char       *attname;    /* actual column name in schemales mode */
+    Oid         atttype;   /* Explicit cast type in schemaless mode
+                               In non-schemaless NULL is expectation  */
+    bool        is_column;  /* for schemaless actual column `exist` operator */
 };
 
 /*
@@ -135,6 +153,10 @@ enum FdwScanPrivateIndex
     FdwScanPrivateMaxOpenFiles,
     /* List of Lists (per filename) */
     FdwScanPrivateRowGroups,
+    /* Schemaless Options */
+    FdwScanPrivateSchemalessOpt,
+    /* Schemaless Columns */
+    FdwScanPrivateSchemalessColumn,
     /* Path to directory having Parquet files to read */
     FdwScanPrivateDirName,
     /* Foreign Table Id */
@@ -152,14 +174,176 @@ struct ParquetFdwPlanState
     bool        use_mmap;
     bool        use_threads;
     int32       max_open_files;
+    bool        files_in_order;
     List       *rowgroups;      /* List of Lists (per filename) */
-    uint64      ntuples;
+    uint64      matched_rows;
     ReaderType  type;
     char       *dirname;
+    bool        schemaless;     /* In schemaless mode or not */
+    schemaless_info slinfo;     /* Schemaless information */
+    List       *slcols;         /* List actual column for schemaless mode */
     Aws::S3::S3Client *s3client;
 };
 
 static void get_filenames_in_dir(ParquetFdwPlanState *fdw_private);
+static void parquet_s3_extract_slcols(ParquetFdwPlanState *fpinfo, PlannerInfo *root, RelOptInfo *baserel, List *tlist);
+
+static int
+get_strategy(Oid type, Oid opno, Oid am)
+{
+        Oid opclass;
+    Oid opfamily;
+
+    opclass = GetDefaultOpClass(type, am);
+
+    if (!OidIsValid(opclass))
+        return 0;
+
+    opfamily = get_opclass_family(opclass);
+
+    return get_op_opfamily_strategy(opno, opfamily);
+}
+
+/*
+ * schemaless_extract_rowgroup_filters
+ *      Build a list of expressions we can use to filter out row groups in schemaless mode
+ */
+static void
+schemaless_extract_rowgroup_filters(List *scan_clauses,
+                                    std::list<RowGroupFilter> &filters,
+                                    schemaless_info *slinfo)
+{
+    ListCell *lc;
+
+    foreach (lc, scan_clauses)
+    {
+        Expr       *clause = (Expr *) lfirst(lc);
+        OpExpr     *expr;
+        Expr       *left, *right;
+        int         strategy;
+        bool        is_key = false;
+        Const      *c;
+        Oid         opno;
+        char       *attname;
+        Oid         atttype = InvalidOid;
+        bool        is_column = false;
+
+        if (IsA(clause, RestrictInfo))
+            clause = ((RestrictInfo *) clause)->clause;
+
+        if (IsA(clause, OpExpr))
+        {
+            expr = (OpExpr *) clause;
+
+            /* Only interested in binary opexprs */
+            if (list_length(expr->args) != 2)
+                continue;
+
+            left = (Expr *) linitial(expr->args);
+            right = (Expr *) lsecond(expr->args);
+
+            /*
+             * Looking for expressions like "EXPR OP CONST" or "CONST OP EXPR"
+             *
+             * XXX In schemaless mode slvar as expression is supported. Will be
+             * extended in future.
+             */
+            if (IsA(right, Const))
+            {
+                /* Check for actual column exist operator: v ? 'actual column' */
+                if (IsA(left, Var) && ((Var *) left)->vartype == JSONBOID)
+                {
+                    /* use actual column name for attname */
+                    attname = TextDatumGetCString(((Const *)right)->constvalue);
+                    atttype = ((Var *) left)->vartype;
+                    is_column = true;
+                }
+                /*
+                 * Check for: - actual column exist operator:  (v->'jsonb_col' ? 'element')
+                 *            - slvar::type OP CONST
+                 */
+                else if (!((attname = parquet_s3_get_nested_jsonb_col((Expr *) left, slinfo, &atttype)) != NULL ||
+                           (attname = parquet_s3_get_slvar((Expr *) left, slinfo, &atttype)) != NULL))
+                    continue;
+
+                opno = expr->opno;
+                c = (Const *) right;
+            }
+            else if (IsA(left, Const))
+            {
+                /* reverse order (CONST OP slvar) */
+                if ((attname = parquet_s3_get_slvar((Expr *)right, slinfo, &atttype)) == NULL)
+                    continue;
+                c = (Const *) left;
+                opno = get_commutator(expr->opno);
+            }
+            else
+                continue;
+
+            /* Not a btree family operator? */
+            if ((strategy = get_strategy(atttype, opno, BTREE_AM_OID)) == 0)
+            {
+                /*
+                 * Maybe it's a gin family operator? (We only support
+                 * jsonb 'exists' operator at the moment:
+                 *      - ((v->>'jsonb_col')::jsonb) ? 'element'
+                 *      - (v->'jsonb_col') ? 'element'
+                 *      - v ? 'actual column'
+                 */
+                if ((strategy = get_strategy(atttype, opno, GIN_AM_OID)) == 0
+                    || strategy != JsonbExistsStrategyNumber)
+                    continue;
+                is_key = true;
+            }
+        }
+        else if ((attname = parquet_s3_get_slvar((Expr *)clause, slinfo, &atttype)) != NULL && atttype == BOOLOID)
+        {
+            /*
+             * Trivial expression containing only a single boolean Var. This
+             * also covers cases "slvar::boolean = true"
+             */
+            strategy = BTEqualStrategyNumber;
+            c = (Const *) makeBoolConst(true, false);
+        }
+        else if (IsA(clause, BoolExpr))
+        {
+            /*
+             * Similar to previous case but for expressions like "!(slvar::boolean)" or
+             * "slvar::boolean = false"
+             */
+            BoolExpr *boolExpr = (BoolExpr *) clause;
+
+            if (boolExpr->args && list_length(boolExpr->args) != 1)
+                continue;
+
+            if ((attname = parquet_s3_get_slvar((Expr *)linitial(boolExpr->args), slinfo, &atttype)) == NULL && atttype == BOOLOID)
+                continue;
+
+            strategy = BTEqualStrategyNumber;
+            c = (Const *) makeBoolConst(false, false);
+        }
+        else
+            continue;
+
+        RowGroupFilter f
+        {
+            .attnum = (AttrNumber)InvalidAttrNumber, /* does not use this in schemaless mode */
+            .is_key = is_key,
+            .value = c,
+            .strategy = strategy,
+            .attname = attname,
+            .atttype = atttype,
+            .is_column = is_column
+        };
+
+        /* potentially inserting elements may throw exceptions */
+        try {
+            filters.push_back(f);
+        } catch (std::exception &e) {
+            elog(ERROR, "parquet_s3_fdw: extracting row filters failed");
+        }
+    }
+}
 
 /*
  * extract_rowgroup_filters
@@ -173,11 +357,11 @@ extract_rowgroup_filters(List *scan_clauses,
 
     foreach (lc, scan_clauses)
     {
-        TypeCacheEntry *tce;
         Expr       *clause = (Expr *) lfirst(lc);
         OpExpr     *expr;
         Expr       *left, *right;
         int         strategy;
+        bool        is_key = false;
         Const      *c;
         Var        *v;
         Oid         opno;
@@ -222,21 +406,25 @@ extract_rowgroup_filters(List *scan_clauses,
             else
                 continue;
 
-            /* TODO */
-            tce = lookup_type_cache(exprType((Node *) left),
-                                    TYPECACHE_BTREE_OPFAMILY);
-            strategy = get_op_opfamily_strategy(opno, tce->btree_opf);
-
             /* Not a btree family operator? */
-            if (strategy == 0)
-                continue;
+            if ((strategy = get_strategy(v->vartype, opno, BTREE_AM_OID)) == 0)
+            {
+                /*
+                 * Maybe it's a gin family operator? (We only support
+                 * jsonb 'exists' operator at the moment)
+                 */
+                if ((strategy = get_strategy(v->vartype, opno, GIN_AM_OID)) == 0
+                    || strategy != JsonbExistsStrategyNumber)
+                    continue;
+                is_key = true;
+            }
         }
         else if (IsA(clause, Var))
         {
             /*
              * Trivial expression containing only a single boolean Var. This
              * also covers cases "BOOL_VAR = true"
-             * */
+             */
             v = (Var *) clause;
             strategy = BTEqualStrategyNumber;
             c = (Const *) makeBoolConst(true, false);
@@ -262,9 +450,19 @@ extract_rowgroup_filters(List *scan_clauses,
         else
             continue;
 
+        /*
+         * System columns should not be extract to filter, since
+         * we don't make any effort to ensure that local and
+         * remote values match (tableoid, in particular, almost
+         * certainly doesn't match).
+         */
+        if (v->varattno < 0)
+            continue;
+
         RowGroupFilter f
         {
             .attnum = v->varattno,
+            .is_key = is_key,
             .value = c,
             .strategy = strategy,
         };
@@ -278,19 +476,118 @@ extract_rowgroup_filters(List *scan_clauses,
     }
 }
 
+static Const *
+convert_const(Const *c, Oid dst_oid)
+{
+    Oid         funcid;
+    CoercionPathType ct;
+
+    ct = find_coercion_pathway(dst_oid, c->consttype,
+                               COERCION_EXPLICIT, &funcid);
+    switch (ct)
+    {
+        case COERCION_PATH_FUNC:
+            {
+                FmgrInfo    finfo;
+                Const      *newc;
+                int16       typlen;
+                bool        typbyval;
+
+                get_typlenbyval(dst_oid, &typlen, &typbyval);
+
+                newc = makeConst(dst_oid,
+                                 0,
+                                 c->constcollid,
+                                 typlen,
+                                 0,
+                                 c->constisnull,
+                                 typbyval);
+                fmgr_info(funcid, &finfo);
+                newc->constvalue = FunctionCall1(&finfo, c->constvalue);
+
+                return newc;
+            }
+        case COERCION_PATH_RELABELTYPE:
+            /* Cast is not needed */
+            break;
+        case COERCION_PATH_COERCEVIAIO:
+            {
+                /*
+                 * In this type of cast we need to output the value to a string
+                 * and then feed this string to the input function of the
+                 * target type.
+                 */
+                Const  *newc;
+                int16   typlen;
+                bool    typbyval;
+                Oid     input_fn, output_fn;
+                Oid     input_param;
+                bool    isvarlena;
+                char   *str;
+
+                /* Construct a new Const node */
+                get_typlenbyval(dst_oid, &typlen, &typbyval);
+                newc = makeConst(dst_oid,
+                                 0,
+                                 c->constcollid,
+                                 typlen,
+                                 0,
+                                 c->constisnull,
+                                 typbyval);
+
+                /* Get IO functions */
+                getTypeOutputInfo(c->consttype, &output_fn, &isvarlena);
+                getTypeInputInfo(dst_oid, &input_fn, &input_param);
+
+                str = DatumGetCString(OidOutputFunctionCall(output_fn,
+                                                            c->constvalue));
+                newc->constvalue = OidInputFunctionCall(input_fn, str,
+                                                        input_param, 0);
+
+                return newc;
+            }
+        default:
+            elog(ERROR, "parquet_s3_fdw: cast function to %s is not found",
+                 format_type_be(dst_oid));
+    }
+    return c;
+}
+
 /*
  * row_group_matches_filter
  *      Check if min/max values of the column of the row group match filter.
  */
 static bool
 row_group_matches_filter(parquet::Statistics *stats,
-                         arrow::DataType *arrow_type,
+                         const arrow::DataType *arrow_type,
                          RowGroupFilter *filter)
 {
     FmgrInfo finfo;
-    Datum    val = filter->value->constvalue;
+    Datum    val;
     int      collid = filter->value->constcollid;
     int      strategy = filter->strategy;
+
+    if (arrow_type->id() == arrow::Type::MAP && filter->is_key)
+    {
+        /*
+         * Special case for jsonb `?` (exists) operator. As key is always
+         * of text type we need first convert it to the target type (if needed
+         * of course).
+         */
+
+        /*
+         * Extract the key type (we don't check correctness here as we've 
+         * already done this in `extract_rowgroups_list()`)
+         */
+        auto strct = arrow_type->fields()[0];
+        auto key = strct->type()->fields()[0];
+        arrow_type = key->type().get();
+
+        /* Do conversion */
+        filter->value = convert_const(filter->value,
+                                      to_postgres_type(arrow_type->id()));
+    }
+    val = filter->value->constvalue;
 
     find_cmp_func(&finfo,
                   filter->value->consttype,
@@ -304,8 +601,9 @@ row_group_matches_filter(parquet::Statistics *stats,
                 Datum   lower;
                 int     cmpres;
                 bool    satisfies;
+                std::string min = std::move(stats->EncodeMin());
 
-                lower = bytes_to_postgres_type(stats->EncodeMin().c_str(),
+                lower = bytes_to_postgres_type(min.c_str(), min.length(),
                                                arrow_type);
                 cmpres = FunctionCall2Coll(&finfo, collid, val, lower);
 
@@ -324,8 +622,9 @@ row_group_matches_filter(parquet::Statistics *stats,
                 Datum   upper;
                 int     cmpres;
                 bool    satisfies;
+                std::string max = std::move(stats->EncodeMax());
 
-                upper = bytes_to_postgres_type(stats->EncodeMax().c_str(),
+                upper = bytes_to_postgres_type(max.c_str(), max.length(),
                                                arrow_type);
                 cmpres = FunctionCall2Coll(&finfo, collid, val, upper);
 
@@ -339,13 +638,16 @@ row_group_matches_filter(parquet::Statistics *stats,
             }
 
         case BTEqualStrategyNumber:
+        case JsonbExistsStrategyNumber:
             {
                 Datum   lower,
                         upper;
+                std::string min = std::move(stats->EncodeMin());
+                std::string max = std::move(stats->EncodeMax());
 
-                lower = bytes_to_postgres_type(stats->EncodeMin().c_str(),
+                lower = bytes_to_postgres_type(min.c_str(), min.length(),
                                                arrow_type);
-                upper = bytes_to_postgres_type(stats->EncodeMax().c_str(),
+                upper = bytes_to_postgres_type(max.c_str(), max.length(),
                                                arrow_type);
 
                 int l = FunctionCall2Coll(&finfo, collid, val, lower);
@@ -358,7 +660,7 @@ row_group_matches_filter(parquet::Statistics *stats,
 
         default:
             /* should not happen */
-            Assert(true);
+            Assert(false);
     }
 
     return true;
@@ -443,6 +745,27 @@ parse_filenames_list(const char *str)
     return filenames;
 }
 
+static bool
+parquet_s3_column_is_existed(parquet::arrow::SchemaManifest manifest, char *column_name)
+{
+    for (auto &schema_field : manifest.schema_fields)
+    {
+        auto       &field = schema_field.field;
+        char        arrow_colname[NAMEDATALEN];
+
+        if (field->name().length() > NAMEDATALEN)
+            throw Error("parquet column name '%s' is too long (max: %d)",
+                        field->name().c_str(), NAMEDATALEN - 1);
+        tolowercase(field->name().c_str(), arrow_colname);
+
+        if (strcmp(column_name, arrow_colname) == 0)
+            return true;    /* Found!!! */
+    }
+
+    /* Can not found column from parquet file */
+    return false;
+}
+
 /*
  * extract_rowgroups_list
  *      Analyze query predicates and using min/max statistics determine which
@@ -455,7 +778,9 @@ extract_rowgroups_list(const char *filename,
                        Aws::S3::S3Client *s3_client,
                        TupleDesc tupleDesc,
                        std::list<RowGroupFilter> &filters,
-                       uint64 *ntuples) noexcept
+                       uint64 *matched_rows,
+                       uint64 *total_rows,
+                       bool schemaless) noexcept
 {
     std::unique_ptr<parquet::arrow::FileReader> reader;
     arrow::Status   status;
@@ -502,13 +827,40 @@ extract_rowgroups_list(const char *filename,
             bool match = true;
             auto rowgroup = meta->RowGroup(r);
 
+            /* Skip empty rowgroups */
+            if (!rowgroup->num_rows())
+                continue;
+
             for (auto &filter : filters)
             {
                 AttrNumber      attnum;
-                const char     *attname;
+                char            pg_colname[NAMEDATALEN];
 
-                attnum = filter.attnum - 1;
-                attname = NameStr(TupleDescAttr(tupleDesc, attnum)->attname);
+                if (schemaless)
+                {
+                    /* In schemaless mode, attname has already existed  */
+                    tolowercase(filter.attname, pg_colname);
+
+                    if (filter.is_column == true)
+                    {
+                        /*
+                         * Check column existed for condition: v ? column
+                         * If column is not existed, exclude current file from file list.
+                         */
+                        if ((match = parquet_s3_column_is_existed(manifest, pg_colname)) == false)
+                        {
+                            elog(DEBUG1, "parquet_s3_fdw: skip file %s", filename);
+                            return NIL;
+                        }
+                        continue;
+                    }
+                }
+                else
+                {
+                    attnum = filter.attnum - 1;
+                    tolowercase(NameStr(TupleDescAttr(tupleDesc, attnum)->attname),
+                                pg_colname);
+                }
 
                 /*
                  * Search for the column with the same name as filtered attribute
@@ -518,18 +870,54 @@ extract_rowgroups_list(const char *filename,
                     MemoryContext   ccxt = CurrentMemoryContext;
                     bool            error = false;
                     char            errstr[ERROR_STR_LEN];
+                    char            arrow_colname[NAMEDATALEN];
                     auto           &field = schema_field.field;
+                    int             column_index;
 
-                    /* Skip complex objects (lists, maps) */
-                    if (schema_field.column_index == -1)
+                    /* Skip complex objects (lists, structs except maps) */
+                    if (schema_field.column_index == -1
+                        && field->type()->id() != arrow::Type::MAP)
                         continue;
 
-                    if (strcmp(attname, schema_field.field->name().c_str()) != 0)
+                    if (field->name().length() > NAMEDATALEN)
+                        throw Error("parquet column name '%s' is too long (max: %d)",
+                                    field->name().c_str(), NAMEDATALEN - 1);
+                    tolowercase(field->name().c_str(), arrow_colname);
+
+                    if (strcmp(pg_colname, arrow_colname) != 0)
                         continue;
+
+                    /* in schemaless mode, skip filter if parquet column type is not match with actual column (explicit cast) type */
+                    if (schemaless)
+                    {
+                        int arrow_type = field->type().get()->id();
+
+                        if (!(filter.atttype == to_postgres_type(arrow_type) ||
+                              (filter.atttype == JSONBOID &&
+                               arrow_type == arrow::Type::MAP)))
+                            continue;
+                    }
+
+                    if (field->type()->id() == arrow::Type::MAP)
+                    {
+                        /*
+                         * Extract `key` column of the map.
+                         * See `create_column_mapping()` for some details on
+                         * map structure.
+                         */
+                        Assert(schema_field.children.size() == 1);
+                        auto &strct = schema_field.children[0];
+
+                        Assert(strct.children.size() == 2);
+                        auto &key = strct.children[0];
+                        column_index = key.column_index;
+                    }
+                    else
+                        column_index = schema_field.column_index;
 
                     /* Found it! */
                     std::shared_ptr<parquet::Statistics>  stats;
-                    auto column = rowgroup->ColumnChunk(schema_field.column_index);
+                    auto column = rowgroup->ColumnChunk(column_index);
                     stats = column->statistics();
 
                     PG_TRY();
@@ -574,8 +962,9 @@ extract_rowgroups_list(const char *filename,
             {
                 /* TODO: PG_TRY */
                 rowgroups = lappend_int(rowgroups, r);
-                *ntuples += rowgroup->num_rows();
+                *matched_rows += rowgroup->num_rows();
             }
+            *total_rows += rowgroup->num_rows();
         }  /* loop over rowgroups */
     }
     catch(const std::exception& e) {
@@ -659,7 +1048,7 @@ extract_parquet_fields(const char *path, const char *dirname, Aws::S3::S3Client 
                     Oid     pg_subtype;
                     bool    error = false;
 
-                    if (type->fields().size() != 1)
+                    if (type->num_fields() != 1)
                         throw std::runtime_error("lists of structs are not supported");
 
                     subtype_id = get_arrow_list_elem_type(type.get());
@@ -727,6 +1116,17 @@ create_foreign_table_query(const char *tablename,
 {
     StringInfoData  str;
     ListCell       *lc;
+    bool		    schemaless = false;
+    bool            is_first = true;
+
+    /* list options */
+    foreach(lc, options)
+    {
+        DefElem *def = (DefElem *) lfirst(lc);
+
+        if (strcmp(def->defname, "schemaless") == 0)
+			schemaless = defGetBoolean(def);
+    }
 
     initStringInfo(&str);
     appendStringInfo(&str, "CREATE FOREIGN TABLE ");
@@ -739,22 +1139,30 @@ create_foreign_table_query(const char *tablename,
         appendStringInfo(&str, "%s (", quote_identifier(tablename));
 
     /* append columns */
-    bool is_first = true;
-    foreach (lc, fields)
+    if (schemaless == true)
     {
-        FieldInfo  *field = (FieldInfo *) lfirst(lc);
-        char       *name = field->name;
-        Oid         pg_type = field->oid;
-        const char *type_name = format_type_be(pg_type);
-
-        if (!is_first)
-            appendStringInfo(&str, ", %s %s", quote_identifier(name), type_name);
-        else
+        /* for schemaless mode, columns specify always 'v jsonb' */
+        appendStringInfoString(&str, "v jsonb");
+    }
+    else
+    {
+        foreach (lc, fields)
         {
-            appendStringInfo(&str, "%s %s", quote_identifier(name), type_name);
-            is_first = false;
+            FieldInfo  *field = (FieldInfo *) lfirst(lc);
+            char       *name = field->name;
+            Oid         pg_type = field->oid;
+            const char *type_name = format_type_be(pg_type);
+
+            if (!is_first)
+                appendStringInfo(&str, ", %s %s", quote_identifier(name), type_name);
+            else
+            {
+                appendStringInfo(&str, "%s %s", quote_identifier(name), type_name);
+                is_first = false;
+            }
         }
     }
+
     appendStringInfo(&str, ") SERVER %s ", quote_identifier(servername));
     appendStringInfo(&str, "OPTIONS (filename '");
 
@@ -803,13 +1211,10 @@ parse_attributes_list(char *start, Oid relid)
     List      *attrs = NIL;
     char      *token;
     const char *delim = " ";
-    AttrNumber attnum;
 
     while ((token = strtok(start, delim)) != NULL)
     {
-        if ((attnum = get_attnum(relid, token)) == InvalidAttrNumber)
-            elog(ERROR, "paruqet_s3_fdw: invalid attribute name '%s'", token);
-        attrs = lappend_int(attrs, attnum);
+        attrs = lappend(attrs, pstrdup(token));
         start = NULL;
     }
 
@@ -908,6 +1313,8 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
     fdw_private->use_mmap = false;
     fdw_private->use_threads = false;
     fdw_private->max_open_files = 0;
+    fdw_private->files_in_order = false;
+    fdw_private->schemaless = false;
     table = GetForeignTable(relid);
 
     foreach(lc, table->options)
@@ -933,19 +1340,11 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
         }
         else if (strcmp(def->defname, "use_mmap") == 0)
         {
-            if (!parse_bool(defGetString(def), &fdw_private->use_mmap))
-                ereport(ERROR,
-                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                         errmsg("parquet_s3_fdw: invalid value for boolean option \"%s\": %s",
-                                def->defname, defGetString(def))));
+            fdw_private->use_mmap = defGetBoolean(def);
         }
         else if (strcmp(def->defname, "use_threads") == 0)
         {
-            if (!parse_bool(defGetString(def), &fdw_private->use_threads))
-                ereport(ERROR,
-                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                         errmsg("parquet_s3_fdw: invalid value for boolean option \"%s\": %s",
-                                def->defname, defGetString(def))));
+            fdw_private->use_threads = defGetBoolean(def);
         }
         else if (strcmp(def->defname, "dirname") == 0)
         {
@@ -956,6 +1355,14 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
             /* check that int value is valid */
             fdw_private->max_open_files = pg_atoi(defGetString(def), sizeof(int32), '\0');
         }
+        else if (strcmp(def->defname, "files_in_order") == 0)
+        {
+            fdw_private->files_in_order = defGetBoolean(def);
+        }
+        else if (strcmp(def->defname, "schemaless") == 0)
+        {
+            fdw_private->schemaless = defGetBoolean(def);
+        }
         else
             elog(ERROR, "parquet_s3_fdw: unknown option '%s'", def->defname);
     }
@@ -965,15 +1372,23 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
 }
 
 extern "C" void
-parquetGetForeignRelSize(PlannerInfo * /* root */,
+parquetGetForeignRelSize(PlannerInfo *root,
                          RelOptInfo *baserel,
                          Oid foreigntableid)
 {
     ParquetFdwPlanState *fdw_private;
+    std::list<RowGroupFilter> filters;
+    RangeTblEntry  *rte;
+    Relation        rel;
+    TupleDesc       tupleDesc;
+    List           *filenames_orig;
+    ListCell       *lc;
+    uint64          matched_rows = 0;
+    uint64          total_rows = 0;
 
     fdw_private = (ParquetFdwPlanState *) palloc0(sizeof(ParquetFdwPlanState));
     get_table_options(foreigntableid, fdw_private);
-    
+
     /* For PGSpider. Overwrite. */
     if (baserel->fdw_private != NIL)
     {
@@ -987,7 +1402,51 @@ parquetGetForeignRelSize(PlannerInfo * /* root */,
         fdw_private->s3client = NULL;
     get_filenames_in_dir(fdw_private);
 
+    parquet_s3_get_schemaless_info(&fdw_private->slinfo, fdw_private->schemaless);
+
+    /* Analyze query clauses and extract ones that can be of interest to us*/
+    if (fdw_private->schemaless)
+        schemaless_extract_rowgroup_filters(baserel->baserestrictinfo, filters, &fdw_private->slinfo);
+    else
+        extract_rowgroup_filters(baserel->baserestrictinfo, filters);
+
+    rte = root->simple_rte_array[baserel->relid];
+#if PG_VERSION_NUM < 120000
+    rel = heap_open(rte->relid, AccessShareLock);
+#else
+    rel = table_open(rte->relid, AccessShareLock);
+#endif
+    tupleDesc = RelationGetDescr(rel);
+
+    /*
+     * Extract list of row groups that match query clauses. Also calculate
+     * approximate number of rows in result set based on total number of tuples
+     * in those row groups. It isn't very precise but it is best we got.
+     */
+    filenames_orig = fdw_private->filenames;
+    fdw_private->filenames = NIL;
+    foreach (lc, filenames_orig)
+    {
+        char *filename = strVal((Value *) lfirst(lc));
+        List *rowgroups = extract_rowgroups_list(filename, fdw_private->dirname, fdw_private->s3client, 
+                                                 tupleDesc, filters, &matched_rows, &total_rows, fdw_private->schemaless);
+
+        if (rowgroups)
+        {
+            fdw_private->rowgroups = lappend(fdw_private->rowgroups, rowgroups);
+            fdw_private->filenames = lappend(fdw_private->filenames, lfirst(lc));
+        }
+    }
+#if PG_VERSION_NUM < 120000
+    heap_close(rel, AccessShareLock);
+#else
+    table_close(rel, AccessShareLock);
+#endif
+    list_free(filenames_orig);
+
     baserel->fdw_private = fdw_private;
+    baserel->tuples = total_rows;
+    baserel->rows = fdw_private->matched_rows = matched_rows;
 }
 
 static void
@@ -997,32 +1456,21 @@ estimate_costs(PlannerInfo *root, RelOptInfo *baserel, Cost *startup_cost,
     auto    fdw_private = (ParquetFdwPlanState *) baserel->fdw_private;
     double  ntuples;
 
-    /* Use statistics if we have it */
-    if (baserel->tuples)
-    {
-        ntuples = baserel->tuples *
-            clauselist_selectivity(root,
-                                   baserel->baserestrictinfo,
-                                   0,
-                                   JOIN_INNER,
-                                   NULL);
-
-    }
-    else
-    {
-        /*
-         * If there is no statistics then use estimate based on rows number
-         * in the selected row groups.
-         */
-        ntuples = fdw_private->ntuples;
-    }
+    ntuples = baserel->tuples *
+        clauselist_selectivity(root,
+                               baserel->baserestrictinfo,
+                               0,
+                               JOIN_INNER,
+                               NULL);
 
     /*
      * Here we assume that parquet tuple cost is the same as regular tuple cost
      * even though this is probably not true in many cases. Maybe we'll come up
-     * with a smarter idea later.
+     * with a smarter idea later. Also we use actual number of rows in selected
+     * rowgroups to calculate cost as we need to process those rows regardless
+     * of whether they're gonna be filtered out or not.
      */
-    *run_cost = ntuples * cpu_tuple_cost;
+    *run_cost = fdw_private->matched_rows * cpu_tuple_cost;
 	*startup_cost = baserel->baserestrictcost.startup;
 	*total_cost = *startup_cost + *run_cost;
 
@@ -1064,29 +1512,251 @@ static void
 cost_merge(Path *path, uint32 nfiles, Cost input_startup_cost,
            Cost input_total_cost, double rows)
 {
-	Cost		startup_cost = 0;
-	Cost		run_cost = 0;
-	Cost		comparison_cost;
-	double		N;
-	double		logN;
+    Cost		startup_cost = 0;
+    Cost		run_cost = 0;
+    Cost		comparison_cost;
+    double		N;
+    double		logN;
 
     N = nfiles;
     logN = LOG2(N);
 
-	/* Assumed cost per tuple comparison */
-	comparison_cost = 2.0 * cpu_operator_cost;
+    /* Assumed cost per tuple comparison */
+    comparison_cost = 2.0 * cpu_operator_cost;
 
-	/* Heap creation cost */
-	startup_cost += comparison_cost * N * logN;
+    /* Heap creation cost */
+    startup_cost += comparison_cost * N * logN;
 
-	/* Per-tuple heap maintenance cost */
-	run_cost += rows * comparison_cost * logN;
+    /* Per-tuple heap maintenance cost */
+    run_cost += rows * comparison_cost * logN;
 
-	/* small cost for heap management, like cost_merge_append */
-	run_cost += cpu_operator_cost * rows;
+    /* small cost for heap management, like cost_merge_append */
+    run_cost += cpu_operator_cost * rows;
 
-	path->startup_cost = startup_cost + input_startup_cost;
-	path->total_cost = (startup_cost + run_cost + input_total_cost);
+    path->startup_cost = startup_cost + input_startup_cost;
+    path->total_cost = (startup_cost + run_cost + input_total_cost);
+}
+
+/*
+ * get actual type for column in sorted option, coresponding type Oid list will be returned.
+ */
+static void
+schemaless_get_sorted_column_type(Aws::S3::S3Client *s3_client, List *file_list, char *dirname, List *attrs_sorted, List **attrs_sorted_type)
+{
+    ListCell   *lc1, *lc2;
+    int         attrs_sorted_num = list_length(attrs_sorted);
+    Oid        *attrs_sorted_type_array = (Oid *)palloc(sizeof(Oid) * attrs_sorted_num);
+    bool       *attrs_sorted_is_taken = (bool *)palloc(sizeof(bool) * attrs_sorted_num);
+
+    memset(attrs_sorted_is_taken, false, attrs_sorted_num);
+
+    foreach(lc1, file_list)
+    {
+        std::unique_ptr<parquet::arrow::FileReader> reader;
+        arrow::Status   status;
+        ReaderCacheEntry *reader_entry  = NULL;
+        std::string     error;
+        char           *filename = strVal((Value *) lfirst(lc1));;
+        int             attrs_sorted_idx = 0;
+
+        /* Open parquet file to read meta information */
+        try
+        {
+            if (s3_client)
+            {
+                char *dname;
+                char *fname;
+                parquetSplitS3Path(dirname, filename, &dname, &fname);
+                reader_entry = parquetGetFileReader(s3_client, dname, fname);
+                reader = std::move(reader_entry->file_reader->reader);
+                pfree(dname);
+                pfree(fname);
+            }
+            else
+            {
+                status = parquet::arrow::FileReader::Make(
+                        arrow::default_memory_pool(),
+                        parquet::ParquetFileReader::OpenFile(filename, false),
+                        &reader);
+            }
+
+            if (!status.ok())
+                throw Error("parquet_s3_fdw: failed to open Parquet file %s", status.message().c_str());
+
+            auto meta = reader->parquet_reader()->metadata();
+            parquet::ArrowReaderProperties  props;
+            parquet::arrow::SchemaManifest  manifest;
+
+            status = parquet::arrow::SchemaManifest::Make(meta->schema(), nullptr,
+                                                        props, &manifest);
+            if (!status.ok())
+                throw Error("parquet_s3_fdw: error creating arrow schema");
+
+            /*
+             * Search for the column with the same name as sorted attribute
+             */
+            foreach(lc2, attrs_sorted)
+            {
+                char *attname = (char *) lfirst(lc2);
+
+                for (auto &schema_field : manifest.schema_fields)
+                {
+                    auto field_name = schema_field.field->name();
+                    char arrow_colname[255];
+
+                    if (field_name.length() > NAMEDATALEN)
+                        throw Error("parquet column name '%s' is too long (max: %d)",
+                                    field_name.c_str(), NAMEDATALEN - 1);
+                    tolowercase(field_name.c_str(), arrow_colname);
+
+                    if (attrs_sorted_is_taken[attrs_sorted_idx] == false && strcmp(attname, arrow_colname) == 0)
+                    {
+                        /* Found it! */
+                        auto arrow_type_id = schema_field.field->type()->id();
+                        attrs_sorted_is_taken[attrs_sorted_idx] = true;
+
+                        switch (arrow_type_id)
+                        {
+                            case arrow::Type::LIST:
+                            case arrow::Type::MAP:
+                                /* In schemaless mode, both NESTED LIST and MAP is mapping with JSONB  */
+                                attrs_sorted_type_array[attrs_sorted_idx] = JSONBOID;
+                                break;
+                            default:
+                                attrs_sorted_type_array[attrs_sorted_idx] = to_postgres_type(arrow_type_id);
+                                break;
+                        }
+
+                        if (attrs_sorted_type_array[attrs_sorted_idx] == InvalidOid)
+                            elog(ERROR, "parquet_s3_fdw: Can not get mapping type of '%s' column from parquet file.", attname);
+                        break;
+                    }
+                }   /* loop over parquet file columns */
+                attrs_sorted_idx++;
+            }  /* loop over sorted columns */
+
+            /* Get list type Oid from attrs_sorted_type_array */
+            for (int i = list_length(*attrs_sorted_type); i < attrs_sorted_num; i++)
+            {
+                if (attrs_sorted_is_taken[i] == true)
+                {
+                    *attrs_sorted_type = lappend_oid(*attrs_sorted_type, attrs_sorted_type_array[i]);
+                }
+                else
+                {
+                    /* break to get missing sorted column from the next file */
+                    break;
+                }
+            }
+
+            /* All sorted column type is taken */
+            if (list_length(*attrs_sorted_type) == attrs_sorted_num)
+                return;
+        }
+        catch(const std::exception& e) {
+            error = e.what();
+        }
+        if (!error.empty()) {
+            if (reader_entry)
+                reader_entry->file_reader->reader = std::move(reader);
+            elog(ERROR,
+                "parquet_s3_fdw: failed to exctract column from Parquet file: %s",
+                error.c_str());
+        }
+    }   /* loop over list parquet file */
+
+    elog(ERROR, "parquet_s3_fdw: '%s' column is not existed.", (char *) list_nth(attrs_sorted, list_length(*attrs_sorted_type)));
+}
+
+static List *
+schemaless_build_path_key(PlannerInfo *root, RelOptInfo *baserel, ParquetFdwPlanState *fdw_private)
+{
+    ListCell       *lc1, *lc2;
+    List           *pathkeys = NIL;
+    Oid             relid = root->simple_rte_array[baserel->relid]->relid;
+    Relation        rel;
+    List           *attrs_sorted_type = NIL;
+
+    /* if there is no parquet file to scan, pathkey is not needed to build */
+    if (fdw_private->filenames == NIL)
+        return NIL;
+
+    rel = table_open(relid, AccessShareLock);
+
+    /* get the actual column type */
+    schemaless_get_sorted_column_type(fdw_private->s3client, fdw_private->filenames, fdw_private->dirname, fdw_private->attrs_sorted, &attrs_sorted_type);
+
+    forboth (lc1, fdw_private->attrs_sorted, lc2, attrs_sorted_type)
+    {
+        char       *attname = (char *) lfirst(lc1);
+        Oid         atttype = lfirst_oid(lc2);
+        int32       typmod;
+        Oid         sort_op;
+        Expr       *expr;
+        List       *schemaless_pathkey;
+        int         jsonb_col_attnum;
+        TupleDesc   tupdesc = RelationGetDescr(rel);
+
+        /* Get the first jsonb attribute number which not dropped */
+        for (jsonb_col_attnum = 1; jsonb_col_attnum <= tupdesc->natts; jsonb_col_attnum++)
+        {
+            Form_pg_attribute attr = TupleDescAttr(tupdesc, jsonb_col_attnum - 1);
+
+            if (!attr->attisdropped && attr->atttypid == JSONBOID)
+            {
+                Datum       constvalue;
+                Expr       *op_clause;
+                Expr       *const_expr;
+                Expr       *var_expr;
+                Oid         typid,
+                            collid;
+
+                /* get atttype and typmod of jsonb column */
+                get_atttypetypmodcoll(relid, jsonb_col_attnum, &typid, &typmod, &collid);
+                /* build jsonb column var */
+                var_expr = (Expr *) makeVar(baserel->relid, jsonb_col_attnum, typid, typmod, collid, 0);
+
+                /* build constant expr from sorted column name (attname) */
+                constvalue = (Datum) palloc0(strlen(attname) + VARHDRSZ);
+                memcpy(VARDATA(constvalue), attname, strlen(attname));
+                SET_VARSIZE(constvalue, strlen(attname) + VARHDRSZ);
+                const_expr = (Expr *) makeConst(TEXTOID, -1, DEFAULT_COLLATION_OID, -1, constvalue, false, false);
+
+                /* Build a schemaless var: v->>'col' */
+                op_clause = (Expr *)make_opclause(fdw_private->slinfo.actual_col_fetch_oid, TEXTOID, false,
+                                    var_expr,
+                                    const_expr,
+                                    DEFAULT_COLLATION_OID, DEFAULT_COLLATION_OID);
+
+                /* Build CoerceviaIO node (v->>'col')::type */
+                expr = (Expr *)coerce_type(NULL, (Node *) op_clause, TEXTOID,
+                                atttype, -1,
+                                COERCION_EXPLICIT, COERCE_EXPLICIT_CAST, -1);
+
+                /* Lookup sorting operator for the attribute type */
+                get_sort_group_operators(atttype,
+                                        true, false, false,
+                                        &sort_op, NULL, NULL,
+                                        NULL);
+
+                schemaless_pathkey = build_expression_pathkey(root, expr, NULL,
+                                                             sort_op, baserel->relids,
+                                                             true);
+                pathkeys = list_concat(pathkeys, schemaless_pathkey);
+                break;
+            }
+        }
+
+        /* can not find the jsonb columb to build path keys */
+        if (jsonb_col_attnum > tupdesc->natts)
+        {
+            table_close(rel, AccessShareLock);
+            elog(ERROR, "parquet_s3_fdw: Schemaless table does not have jsonb column.");
+        }
+    }
+
+    table_close(rel, AccessShareLock);
+    return pathkeys;
 }
 
 extern "C" void
@@ -1101,80 +1771,77 @@ parquetGetForeignPaths(PlannerInfo *root,
     Cost        run_cost;
     bool        is_sorted, is_multi;
     List       *pathkeys = NIL;
-    RangeTblEntry  *rte;
-    Relation        rel;
-    TupleDesc       tupleDesc;
     std::list<RowGroupFilter> filters;
-    ListCell       *lc;
+    ListCell   *lc;
+    bool        schemaless;
 
     fdw_private = (ParquetFdwPlanState *) baserel->fdw_private;
-    is_sorted = fdw_private->attrs_sorted != NIL;
-    is_multi = list_length(fdw_private->filenames) > 1;
-
-    /* Analyze query clauses and extract ones that can be of interest to us*/
-    extract_rowgroup_filters(baserel->baserestrictinfo, filters);
-
-    rte = root->simple_rte_array[baserel->relid];
-#if PG_VERSION_NUM < 120000
-    rel = heap_open(rte->relid, AccessShareLock);
-#else
-    rel = table_open(rte->relid, AccessShareLock);
-#endif
-    tupleDesc = RelationGetDescr(rel);
-
-    /*
-     * Extract list of row groups that match query clauses. Also calculate
-     * approximate number of rows in result set based on total number of tuples
-     * in those row groups. It isn't very precise but it is best we got.
-     */
-    foreach (lc, fdw_private->filenames)
-    {
-        char *filename = strVal((Value *) lfirst(lc));
-        List *rowgroups = extract_rowgroups_list(filename, fdw_private->dirname, fdw_private->s3client, tupleDesc,
-                                                 filters, &fdw_private->ntuples);
-
-        fdw_private->rowgroups = lappend(fdw_private->rowgroups, rowgroups);
-    }
-#if PG_VERSION_NUM < 120000
-    heap_close(rel, AccessShareLock);
-#else
-    table_close(rel, AccessShareLock);
-#endif
+    schemaless = fdw_private->schemaless;
 
     estimate_costs(root, baserel, &startup_cost, &run_cost, &total_cost);
 
     /* Collect used attributes to reduce number of read columns during scan */
     extract_used_attributes(baserel);
 
-    fdw_private->type = is_multi ? RT_MULTI : RT_SINGLE;
+    is_sorted = fdw_private->attrs_sorted != NIL;
+    is_multi = list_length(fdw_private->filenames) > 1;
+    fdw_private->type = is_multi ? RT_MULTI :
+        (list_length(fdw_private->filenames) == 0 ? RT_TRIVIAL : RT_SINGLE);
 
-    /* Build pathkeys based on attrs_sorted */
-    foreach (lc, fdw_private->attrs_sorted)
+    if (schemaless)
     {
-        Oid         relid = root->simple_rte_array[baserel->relid]->relid;
-        int         attnum = lfirst_int(lc);
-        Oid         typid,
-                    collid;
-        int32       typmod;
-        Oid         sort_op;
-        Var        *var;
-        List       *attr_pathkey;
-
-        /* Build an expression (simple var) */
-        get_atttypetypmodcoll(relid, attnum, &typid, &typmod, &collid);
-        var = makeVar(baserel->relid, attnum, typid, typmod, collid, 0);
-
-        /* Lookup sorting operator for the attribute type */
-        get_sort_group_operators(typid,
-                                 true, false, false,
-                                 &sort_op, NULL, NULL,
-                                 NULL);
-
-        attr_pathkey = build_expression_pathkey(root, (Expr *) var, NULL,
-                                                sort_op, baserel->relids,
-                                                true);
-        pathkeys = list_concat(pathkeys, attr_pathkey);
+        pathkeys = schemaless_build_path_key(root, baserel, fdw_private);
     }
+    else
+    {
+        /* Build pathkeys based on attrs_sorted */
+        foreach (lc, fdw_private->attrs_sorted)
+        {
+            Oid         relid = root->simple_rte_array[baserel->relid]->relid;
+            int         attnum;
+            Oid         typid,
+                        collid;
+            int32       typmod;
+            Oid         sort_op;
+            Var        *var;
+            List       *attr_pathkey;
+
+            if ((attnum = get_attnum(relid, (char *)lfirst(lc))) == InvalidAttrNumber)
+                elog(ERROR, "parquet_s3_fdw: invalid attribute name '%s'", (char *)lfirst(lc));
+
+            /* Build an expression (simple var) */
+            get_atttypetypmodcoll(relid, attnum, &typid, &typmod, &collid);
+            var = makeVar(baserel->relid, attnum, typid, typmod, collid, 0);
+
+            /* Lookup sorting operator for the attribute type */
+            get_sort_group_operators(typid,
+                                    true, false, false,
+                                    &sort_op, NULL, NULL,
+                                    NULL);
+
+            attr_pathkey = build_expression_pathkey(root, (Expr *) var, NULL,
+                                                    sort_op, baserel->relids,
+                                                    true);
+            pathkeys = list_concat(pathkeys, attr_pathkey);
+        }
+    }
+
+    foreign_path = (Path *) create_foreignscan_path(root, baserel,
+                                                    NULL,	/* default pathtarget */
+                                                    baserel->rows,
+                                                    startup_cost,
+                                                    total_cost,
+                                                    NULL,   /* no pathkeys */
+                                                    baserel->lateral_relids,
+                                                    NULL,	/* no extra plan */
+                                                    (List *) fdw_private);
+    if (!enable_multifile && is_multi)
+        foreign_path->total_cost += disable_cost;
+
+    add_path(baserel, (Path *) foreign_path);
+
+    if (fdw_private->type == RT_TRIVIAL)
+        return;
 
     /* Create a separate path with pathkeys for sorted parquet files. */
     if (is_sorted)
@@ -1202,63 +1869,94 @@ parquetGetForeignPaths(PlannerInfo *root,
                 RT_CACHING_MULTI_MERGE : RT_MULTI_MERGE;
 
             cost_merge((Path *) path, list_length(private_sort->filenames),
-                       startup_cost, total_cost, baserel->rows);
+                       startup_cost, total_cost, private_sort->matched_rows);
+
+            if (!enable_multifile_merge)
+                path->total_cost += disable_cost;
         }
         add_path(baserel, path);
     }
 
-	foreign_path = (Path *) create_foreignscan_path(root, baserel,
-                                                    NULL,	/* default pathtarget */
-                                                    baserel->rows,
-                                                    startup_cost,
-                                                    total_cost,
-                                                    NULL,   /* no pathkeys */
-                                                    baserel->lateral_relids,
-                                                    NULL,	/* no extra plan */
-                                                    (List *) fdw_private);
-	add_path(baserel, (Path *) foreign_path);
-
+    /* Parallel paths */
     if (baserel->consider_parallel > 0)
     {
         ParquetFdwPlanState *private_parallel;
+        bool use_pathkeys = false;
 
         private_parallel = (ParquetFdwPlanState *) palloc(sizeof(ParquetFdwPlanState));
         memcpy(private_parallel, fdw_private, sizeof(ParquetFdwPlanState));
         private_parallel->type = is_multi ? RT_MULTI : RT_SINGLE;
 
-        Path *parallel_path = (Path *)
+        /* For mutifile reader only use pathkeys when files are in order */
+        use_pathkeys = is_sorted && (!is_multi || (is_multi && fdw_private->files_in_order));
+
+        Path *path = (Path *)
                  create_foreignscan_path(root, baserel,
                                          NULL,	/* default pathtarget */
                                          baserel->rows,
                                          startup_cost,
                                          total_cost,
-                                         pathkeys,
+                                         use_pathkeys ? pathkeys : NULL,
                                          baserel->lateral_relids,
                                          NULL,	/* no extra plan */
                                          (List *) private_parallel);
 
         int num_workers = max_parallel_workers_per_gather;
 
-        parallel_path->rows = fdw_private->ntuples / (num_workers + 1);
-        parallel_path->total_cost       = startup_cost + run_cost / num_workers;
-        parallel_path->parallel_workers = num_workers;
-        parallel_path->parallel_aware   = true;
-        parallel_path->parallel_safe    = true;
+        path->rows = path->rows / (num_workers + 1);
+        path->total_cost       = startup_cost + run_cost / (num_workers + 1);
+        path->parallel_workers = num_workers;
+        path->parallel_aware   = true;
+        path->parallel_safe    = true;
 
-        /* Create GatherMerge path for sorted parquet files */
-        if (is_sorted)
+        if (!enable_multifile)
+            path->total_cost += disable_cost;
+
+        add_partial_path(baserel, path);
+
+        /* Multifile Merge parallel path */
+        if (is_multi && is_sorted)
         {
-            GatherMergePath *gather_merge =
-                create_gather_merge_path(root, baserel, parallel_path, NULL,
-                                         pathkeys, NULL, NULL);
-            add_path(baserel, (Path *) gather_merge);
+            ParquetFdwPlanState *private_parallel_merge;
+
+            private_parallel_merge = (ParquetFdwPlanState *) palloc(sizeof(ParquetFdwPlanState));
+            memcpy(private_parallel_merge, fdw_private, sizeof(ParquetFdwPlanState));
+
+            private_parallel_merge->type = private_parallel_merge->max_open_files > 0 ?
+                RT_CACHING_MULTI_MERGE : RT_MULTI_MERGE;
+
+            Path *path = (Path *)
+                     create_foreignscan_path(root, baserel,
+                                             NULL,	/* default pathtarget */
+                                             baserel->rows,
+                                             startup_cost,
+                                             total_cost,
+                                             pathkeys,
+                                             baserel->lateral_relids,
+                                             NULL,	/* no extra plan */
+                                             (List *) private_parallel_merge);
+
+            int num_workers = max_parallel_workers_per_gather;
+
+            cost_merge(path, list_length(private_parallel_merge->filenames),
+                       startup_cost, total_cost, private_parallel_merge->matched_rows);
+
+            path->rows = path->rows / (num_workers + 1);
+            path->total_cost = path->startup_cost + path->total_cost / (num_workers + 1);
+            path->parallel_workers = num_workers;
+            path->parallel_aware   = true;
+            path->parallel_safe    = true;
+
+            if (!enable_multifile_merge)
+                path->total_cost += disable_cost;
+
+            add_partial_path(baserel, path);
         }
-        add_partial_path(baserel, parallel_path);
     }
 }
 
 extern "C" ForeignScan *
-parquetGetForeignPlan(PlannerInfo * /* root */,
+parquetGetForeignPlan(PlannerInfo *root,
                       RelOptInfo *baserel,
                       Oid foreigntableid,
                       ForeignPath *best_path,
@@ -1267,7 +1965,7 @@ parquetGetForeignPlan(PlannerInfo * /* root */,
                       Plan *outer_plan)
 {
     ParquetFdwPlanState *fdw_private = (ParquetFdwPlanState *) best_path->fdw_private;
-	Index		scan_relid = baserel->relid;
+    Index		scan_relid = baserel->relid;
     List       *attrs_used = NIL;
     List       *attrs_sorted = NIL;
     AttrNumber  attr;
@@ -1281,7 +1979,9 @@ parquetGetForeignPlan(PlannerInfo * /* root */,
 	 * nodes from the clauses and ignore pseudoconstants (which will be
 	 * handled elsewhere).
 	 */
-	scan_clauses = extract_actual_clauses(scan_clauses, false);
+    scan_clauses = extract_actual_clauses(scan_clauses, false);
+
+    parquet_s3_extract_slcols(fdw_private, root, baserel, tlist);
 
     /*
      * We can't just pass arbitrary structure into make_foreignscan() because
@@ -1294,7 +1994,7 @@ parquetGetForeignPlan(PlannerInfo * /* root */,
         attrs_used = lappend_int(attrs_used, attr);
 
     foreach (lc, fdw_private->attrs_sorted)
-        attrs_sorted = lappend_int(attrs_sorted, lfirst_int(lc));
+        attrs_sorted = lappend(attrs_sorted, makeString((char *)lfirst(lc)));
 
     /* Packing all the data needed by executor into the list */
     params = lappend(params, fdw_private->filenames);
@@ -1305,6 +2005,8 @@ parquetGetForeignPlan(PlannerInfo * /* root */,
     params = lappend(params, makeInteger(fdw_private->type));
     params = lappend(params, makeInteger(fdw_private->max_open_files));
     params = lappend(params, fdw_private->rowgroups);
+    params = lappend(params, makeInteger(fdw_private->schemaless));
+    params = lappend(params, fdw_private->slcols);
 
     /*
      * Store foreign table id in order to enable to get S3 handle in
@@ -1312,7 +2014,7 @@ parquetGetForeignPlan(PlannerInfo * /* root */,
      * BeginForeignScan can recognize S3 handle is not used.
      * copyObject() called in PostgreSQL core cannot handle data of
      * which type is Aws::S3::S3Client*. So we recreate S3 handle via
-     * foreign table id. 
+     * foreign table id.
      */
     if (fdw_private->s3client)
     {
@@ -1326,7 +2028,7 @@ parquetGetForeignPlan(PlannerInfo * /* root */,
     {
         params = lappend(params, makeInteger(0));
     }
-        
+
 	/* Create the ForeignScan node */
 	return make_foreignscan(tlist,
 							scan_clauses,
@@ -1361,6 +2063,10 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
     Aws::S3::S3Client *s3client = NULL;
     int             max_open_files = 0;
     std::string     error;
+    List           *slcols_list;
+    bool            schemaless = false;
+    std::set<std::string> slcols;
+    std::set<std::string> sorted_cols;
 
     /* Unwrap fdw_private */
     foreach (lc, fdw_private)
@@ -1393,6 +2099,19 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
             case FdwScanPrivateRowGroups:
                 rowgroups_list = (List *) lfirst(lc);
                 break;
+            case FdwScanPrivateSchemalessOpt:
+                schemaless = (bool) intVal((Value *) lfirst(lc));
+                break;
+            case FdwScanPrivateSchemalessColumn:
+            {
+                slcols_list = (List *) lfirst(lc);
+                foreach(lc2, slcols_list)
+                {
+                    StringInfo *rcol = (StringInfo *)lfirst(lc2);
+                    slcols.insert(std::string(strVal(rcol)));
+                }
+                break;
+            }
             case FdwScanPrivateDirName:
                 dirname = (char *) strVal((Value *) lfirst(lc));
                 break;
@@ -1419,37 +2138,55 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
     foreach (lc, attrs_sorted)
     {
         SortSupportData sort_key;
-        int     attr = lfirst_int(lc);
+        char   *attname = (char *) strVal(lfirst(lc));
         Oid     typid;
         int     typmod;
         Oid     collid;
         Oid     relid = RelationGetRelid(node->ss.ss_currentRelation);
         Oid     sort_op;
+        int     attr;
 
-        memset(&sort_key, 0, sizeof(SortSupportData));
-
-        get_atttypetypmodcoll(relid, attr, &typid, &typmod, &collid);
-
-        sort_key.ssup_cxt = reader_cxt;
-        sort_key.ssup_collation = collid;
-        sort_key.ssup_nulls_first = true;
-        sort_key.ssup_attno = attr;
-        sort_key.abbreviate = false;
-
-        get_sort_group_operators(typid,
-                                 true, false, false,
-                                 &sort_op, NULL, NULL,
-                                 NULL);
-
-        PrepareSortSupportFromOrderingOp(sort_op, &sort_key);
-
-        try {
-            sort_keys.push_back(sort_key);
-        } catch (std::exception &e) {
-            error = e.what();
+        if (schemaless)
+        {
+            /*
+             * Sort key for schemaless actual column will be get when create
+             * column mapping. At now, get attname only.
+             */
+            sorted_cols.insert(std::string(attname));
         }
-        if (!error.empty())
-            elog(ERROR, "parquet_s3_fdw: scan initialization failed: %s", error.c_str());
+        else
+        {
+            attr = get_attnum(relid, attname);
+            if (attr == InvalidAttrNumber)
+            {
+                elog(ERROR, "paruqet_s3_fdw: invalid attribute name '%s'", attname);
+            }
+
+            memset(&sort_key, 0, sizeof(SortSupportData));
+
+            get_atttypetypmodcoll(relid, attr, &typid, &typmod, &collid);
+
+            sort_key.ssup_cxt = reader_cxt;
+            sort_key.ssup_collation = collid;
+            sort_key.ssup_nulls_first = true;
+            sort_key.ssup_attno = attr;
+            sort_key.abbreviate = false;
+
+            get_sort_group_operators(typid,
+                                    true, false, false,
+                                    &sort_op, NULL, NULL,
+                                    NULL);
+
+            PrepareSortSupportFromOrderingOp(sort_op, &sort_key);
+
+            try {
+                sort_keys.push_back(sort_key);
+            } catch (std::exception &e) {
+                error = e.what();
+            }
+            if (!error.empty())
+                elog(ERROR, "parquet_s3_fdw: scan initialization failed: %s", error.c_str());
+        }
     }
 
     try
@@ -1457,10 +2194,8 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
         festate = create_parquet_execution_state(reader_type, reader_cxt, dirname, s3client, tupleDesc,
                                                  attrs_used, sort_keys,
                                                  use_threads, use_mmap,
-                                                 max_open_files);
-
-        if (!filenames)
-            throw std::runtime_error("parquet_s3_fdw: got an empty filenames list");
+                                                 max_open_files, schemaless,
+                                                 slcols, sorted_cols);
 
         forboth (lc, filenames, lc2, rowgroups_list)
         {
@@ -1587,6 +2322,8 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
     uint64          num_rows = 0;
     ListCell       *lc;
     std::string     error;
+    bool            schemaless;
+    std::set<std::string> slcols;
 
     get_table_options(RelationGetRelid(relation), &fdw_private);
 
@@ -1602,13 +2339,21 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
         fdw_private.s3client = NULL;
     get_filenames_in_dir(&fdw_private);
 
+    schemaless = fdw_private.schemaless;
+    foreach(lc, fdw_private.slcols)
+    {
+        StringInfo *rcol = (StringInfo *)lfirst(lc);
+        slcols.insert(std::string(strVal(rcol)));
+    }
+
     festate = create_parquet_execution_state(RT_MULTI, reader_cxt, 
                                              fdw_private.dirname,
                                              fdw_private.s3client,
                                              tupleDesc,
                                              attrs_used, std::list<SortSupportData>(),
                                              fdw_private.use_threads,
-                                             false, 0);
+                                             false, 0, schemaless, slcols,
+                                             std::set<std::string>());
 
     foreach (lc, fdw_private.filenames)
     {
@@ -1750,6 +2495,9 @@ parquetExplainForeignScan(ForeignScanState *node, ExplainState *es)
 
     switch (reader_type)
     {
+        case RT_TRIVIAL:
+            ExplainPropertyText("Reader", "Trivial", es);
+            return; /* no rowgroups list output required, just return here */
         case RT_SINGLE:
             ExplainPropertyText("Reader", "Single File", es);
             break;
@@ -1811,40 +2559,51 @@ parquetIsForeignScanParallelSafe(PlannerInfo * /* root */,
                                  RelOptInfo *rel,
                                  RangeTblEntry * /* rte */)
 {
-    /* Use parallel execution only when statistics are collected */
-    return (rel->tuples > 0);
+    /* Plan nodes that reference a correlated SubPlan is always parallel restricted. 
+     * Therefore, return false when there is lateral join.
+     */
+    if (rel->lateral_relids)
+        return false;
+    return true;
 }
 
 extern "C" Size
-parquetEstimateDSMForeignScan(ForeignScanState * /* node */,
+parquetEstimateDSMForeignScan(ForeignScanState *node,
                               ParallelContext * /* pcxt */)
 {
-    return sizeof(ParallelCoordinator);
+    ParquetS3FdwExecutionState   *festate;
+
+    festate = (ParquetS3FdwExecutionState *) node->fdw_state;
+    return festate->estimate_coord_size();
 }
 
 extern "C" void
 parquetInitializeDSMForeignScan(ForeignScanState *node,
-                                ParallelContext * /* pcxt */,
+                                ParallelContext * pcxt,
                                 void *coordinate)
 {
     ParallelCoordinator        *coord = (ParallelCoordinator *) coordinate;
     ParquetS3FdwExecutionState   *festate;
 
-    coord->next_rowgroup = 0;
-    coord->next_reader = 0;
+    /*
+    coord->i.s.next_rowgroup = 0;
+    coord->i.s.next_reader = 0;
     SpinLockInit(&coord->lock);
+    */
     festate = (ParquetS3FdwExecutionState *) node->fdw_state;
     festate->set_coordinator(coord);
+    festate->init_coord();
 }
 
 extern "C" void
-parquetReInitializeDSMForeignScan(ForeignScanState * /* node */,
+parquetReInitializeDSMForeignScan(ForeignScanState *node,
                                   ParallelContext * /* pcxt */,
-                                  void *coordinate)
+                                  void * /* coordinate */)
 {
-    ParallelCoordinator    *coord = (ParallelCoordinator *) coordinate;
+    ParquetS3FdwExecutionState   *festate;
 
-    coord->next_rowgroup = 0;
+    festate = (ParquetS3FdwExecutionState *) node->fdw_state;
+    festate->init_coord();
 }
 
 extern "C" void
@@ -1995,7 +2754,7 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
 
                     ereport(ERROR,
                             (errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
-                             errmsg("parquet_s3_fdw: %s", strerror(e))));
+                             errmsg("parquet_s3_fdw: %s ('%s')", strerror(e), fn)));
                 }
             }
             pfree(filenames);
@@ -2034,24 +2793,12 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
         else if (strcmp(def->defname, "use_mmap") == 0)
         {
             /* Check that bool value is valid */
-            bool    use_mmap;
-
-            if (!parse_bool(defGetString(def), &use_mmap))
-                ereport(ERROR,
-                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                         errmsg("parquet_s3_fdw: invalid value for boolean option \"%s\": %s",
-                                def->defname, defGetString(def))));
+            (void) defGetBoolean(def);
         }
         else if (strcmp(def->defname, "use_threads") == 0)
         {
             /* Check that bool value is valid */
-            bool    use_threads;
-
-            if (!parse_bool(defGetString(def), &use_threads))
-                ereport(ERROR,
-                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                         errmsg("parquet_s3_fdw: invalid value for boolean option \"%s\": %s",
-                                def->defname, defGetString(def))));
+            (void) defGetBoolean(def);
         }
         else if (strcmp(def->defname, "dirname") == 0)
         {
@@ -2063,7 +2810,7 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
             if (!IS_S3_PATH(dirname))
             {
                 struct stat stat_buf;
- 
+
                 if (stat(dirname, &stat_buf) != 0)
                 {
                     int e = errno;
@@ -2088,6 +2835,16 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
         {
             /* check that int value is valid */
             pg_atoi(defGetString(def), sizeof(int32), '\0');
+        }
+        else if (strcmp(def->defname, "files_in_order") == 0)
+        {
+            /* Check that bool value is valid */
+			(void) defGetBoolean(def);
+        }
+        else if (strcmp(def->defname, "schemaless") == 0)
+        {
+            /* Check that bool value is valid */
+			(void) defGetBoolean(def);
         }
         else
         {
@@ -2333,6 +3090,8 @@ import_parquet_s3_with_attrs(PG_FUNCTION_ARGS)
     Jsonb      *arg;
     Jsonb      *options;
     List       *fields;
+    bool        schemaless = false;
+    ListCell   *lc;
 
     tablename = PG_ARGISNULL(0) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(0));
     schemaname = PG_ARGISNULL(1) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(1));
@@ -2343,7 +3102,27 @@ import_parquet_s3_with_attrs(PG_FUNCTION_ARGS)
     arg = PG_ARGISNULL(6) ? NULL : PG_GETARG_JSONB_P(6);
     options = PG_ARGISNULL(7) ? NULL : PG_GETARG_JSONB_P(7);
 
-    fields = array_to_fields_list(attnames, atttypes);
+
+    foreach(lc, jsonb_to_options_list(options))
+    {
+        DefElem *def = (DefElem *) lfirst(lc);
+
+        if (strcmp(def->defname, "schemaless") == 0)
+			schemaless = defGetBoolean(def);
+    }
+
+    if (schemaless)
+    {
+        if (attnames != NULL || atttypes != NULL)
+            ereport(WARNING,
+                    errmsg("parquet_s3_fdw: Attnames and atttypes are expected to be NULL. They are meaningless for schemaless table."),
+                    errhint("Schemaless table imported always contain \"v\" column with \"jsonb\" type."));
+        fields = NIL;
+    }
+    else
+    {
+        fields = array_to_fields_list(attnames, atttypes);
+    }
 
     import_parquet_internal(tablename, schemaname, servername, fields,
                             funcid, arg, options);
@@ -2370,3 +3149,116 @@ get_filenames_in_dir(ParquetFdwPlanState *fdw_private)
         elog(ERROR, "parquet_s3_fdw: object not found on %s", fdw_private->dirname);
 }
 
+/*
+ * parquet_s3_is_select_all: True if all variables are selected
+ */
+bool
+parquet_s3_is_select_all(RangeTblEntry *rte, List *tlist)
+{
+	int         i;
+	int         natts = 0;
+	int         natts_valid = 0;
+	Relation	rel = table_open(rte->relid, NoLock);
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	Oid         rel_type_id;
+	bool        has_rel_type_id = false;
+    bool        has_whole_row = false;
+    bool        has_slcol = false;
+
+	rel_type_id = get_rel_type_id(rte->relid);
+
+	for (i = 1; i <= tupdesc->natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
+		ListCell          *lc;
+
+		/* Ignore dropped attributes. */
+		if (attr->attisdropped)
+			continue;
+
+		natts_valid++;
+
+		foreach(lc, tlist)
+		{
+			Node *node = (Node *)lfirst(lc);
+
+            if (IsA(node, TargetEntry))
+				node = (Node *)((TargetEntry *) node)->expr;
+
+			if (IsA(node, Var))
+			{
+				Var *var = (Var *) node;
+
+				if (var->vartype == rel_type_id)
+				{
+					has_rel_type_id = true;
+					break;
+				}
+
+                if (var->varattno == 0)
+				{
+					has_whole_row = true;
+					break;
+				}
+
+				if (var->varattno == attr->attnum)
+				{
+                    if (attr->atttypid == JSONBOID)
+                        has_slcol = true;
+
+					natts++;
+					break;
+				}
+			}
+		}
+        if (has_rel_type_id || has_whole_row || has_slcol)
+            break;
+	}
+
+	table_close(rel, NoLock);
+
+	return (natts == natts_valid) || has_rel_type_id || has_whole_row || has_slcol;
+}
+
+static void
+parquet_s3_extract_slcols(ParquetFdwPlanState *fpinfo, PlannerInfo *root, RelOptInfo *baserel, List *tlist)
+{
+	RangeTblEntry  *rte;
+    bool            is_select_all = false;
+    List           *exprs = NULL;
+    ListCell       *lc = NULL;
+    List           *input_tlist = NIL;
+
+	if (fpinfo->slinfo.schemaless == false)
+		return;
+
+    fpinfo->slcols = NIL;
+    input_tlist = (tlist != NIL) ? tlist : baserel->reltarget->exprs;
+
+	rte = planner_rt_fetch(baserel->relid, root);
+	is_select_all = parquet_s3_is_select_all(rte, input_tlist);
+
+    if (is_select_all == true)
+        return;
+
+	/* Extract schemaless variable names from input_tlist */
+    fpinfo->slcols = parquet_s3_pull_slvars((Expr *)input_tlist, baserel->relid,
+											fpinfo->slcols, false, NULL, &(fpinfo->slinfo));
+
+    /*
+     * Pull slvar from baserestrictinfo only.
+     */
+    foreach(lc, baserel->baserestrictinfo)
+    {
+        RestrictInfo *ri = (RestrictInfo *) lfirst(lc);
+        exprs = parquet_s3_pull_slvars(ri->clause, baserel->relid,
+                                            exprs, true, NULL, &(fpinfo->slinfo));
+    }
+
+    foreach(lc, exprs)
+    {
+        fpinfo->slcols = parquet_s3_pull_slvars((Expr *)lfirst(lc), baserel->relid,
+                                                    fpinfo->slcols, false, NULL, &(fpinfo->slinfo));
+    }
+
+}
