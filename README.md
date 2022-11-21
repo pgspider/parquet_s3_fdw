@@ -38,7 +38,7 @@ CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw;
 ```
 If using [MinIO][3] instead of AWS S3, please use use_minio option for create server.
 ```sql
-CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw OPTIONS (use_minio 'true');
+CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw OPTIONS (use_minio 'minio:9000');
 ```
 
 ### Create user mapping
