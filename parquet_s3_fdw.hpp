@@ -84,7 +84,7 @@ extern List *extract_parquet_fields(const char *path, const char *dirname, Aws::
 extern char *create_foreign_table_query(const char *tablename, const char *schemaname, const char *servername,
                                          char **paths, int npaths, List *fields, List *options);
 
-extern Aws::S3::S3Client *parquetGetConnection(UserMapping *user);
+extern Aws::S3::S3Client *parquetGetConnection(UserMapping *user,const char *use_minio);
 extern Aws::S3::S3Client *parquetGetConnectionByTableid(Oid foreigntableid);
 extern List* parquetGetS3ObjectList(Aws::S3::S3Client *s3_cli, const char *s3path);
 extern List* parquetGetDirFileList(List *filelist, const char *path);

@@ -35,17 +35,20 @@ parquet_s3_is_valid_server_option(DefElem *def)
 	if (strcmp(def->defname, SERVER_OPTION_USE_MINIO) == 0 ||
 		strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0)
 	{
-		/* Check that bool value is valid */
-		bool		check_bool_valid;
+		if (strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0)
+		{
+			/* Check that bool value is valid */
+			bool		check_bool_valid;
 
-		if (!parse_bool(defGetString(def), &check_bool_valid))
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("parquet_s3_fdw: invalid value for boolean option \"%s\": %s",
-							def->defname, defGetString(def))));
+			if (!parse_bool(defGetString(def), &check_bool_valid))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("parquet_s3_fdw: invalid value for boolean option \"%s\": %s",
+								def->defname, defGetString(def))));
+			return true;
+		}
 		return true;
 	}
-
 	return false;
 }
 
@@ -63,7 +66,7 @@ parquet_s3_extract_options(List *options, parquet_s3_server_opt * opt)
 		DefElem    *def = (DefElem *) lfirst(lc);
 
 		if (strcmp(def->defname, SERVER_OPTION_USE_MINIO) == 0)
-			opt->use_minio = defGetBoolean(def);
+			opt->use_minio = defGetString(def);
 		else if (strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0)
 			opt->keep_connections = defGetBoolean(def);
 	}
@@ -86,7 +89,7 @@ parquet_s3_get_options(Oid foreignoid)
 	memset(opt, 0, sizeof(parquet_s3_server_opt));
 
 	/* Set default value. */
-	opt->use_minio = false;
+	opt->use_minio = "";
 	/* By default, all the connections to any foreign servers are kept open. */
 	opt->keep_connections = true;
 
@@ -133,7 +136,7 @@ parquet_s3_get_server_options(Oid serverid)
 	memset(opt, 0, sizeof(parquet_s3_server_opt));
 
 	/* Set default value. */
-	opt->use_minio = false;
+	opt->use_minio = "";
 	/* By default, all the connections to any foreign servers are kept open. */
 	opt->keep_connections = true;
 

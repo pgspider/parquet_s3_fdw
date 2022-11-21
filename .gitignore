@@ -5,3 +5,6 @@
 regression.diffs
 regression.out
 results
+.devcontainer
+.vscode
+.DS_Store

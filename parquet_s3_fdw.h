@@ -41,7 +41,7 @@
 /* Structure to store option information. */
 typedef struct parquet_s3_server_opt
 {
-	bool		use_minio;		/* Connect to MinIO instead of Amazon S3. */
+	const char *		use_minio;		/* Connect to MinIO hostname instead of Amazon S3. */
 	bool		keep_connections;	/* setting value of keep_connections
 									 * server option */
 }			parquet_s3_server_opt;
