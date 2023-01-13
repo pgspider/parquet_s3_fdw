@@ -3,7 +3,7 @@
  * parquet_s3_fdw_connection.c
  *		  Connection management functions for parquet_s3_fdw
  *
- * Portions Copyright (c) 2021, TOSHIBA CORPORATION
+ * Portions Copyright (c) 2020, TOSHIBA CORPORATION
  *
  * IDENTIFICATION
  *		  contrib/parquet_s3_fdw/parquet_s3_fdw_connection.c
@@ -15,6 +15,9 @@
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/ListObjectsRequest.h>
+#include <aws/s3/model/GetObjectRequest.h>
+#include <aws/s3/model/PutObjectRequest.h>
+#include <fstream>
 #include <dirent.h>
 #include <sys/stat.h>
 #include "parquet_s3_fdw.hpp"
@@ -119,7 +122,7 @@ static Aws::S3::S3Client *create_s3_connection(ForeignServer *server, UserMappin
 static void close_s3_connection(ConnCacheEntry *entry);
 static void check_conn_params(const char **keywords, const char **values, UserMapping *user);
 static void parquet_fdw_inval_callback(Datum arg, int cacheid, uint32 hashvalue);
-static Aws::S3::S3Client* s3_client_open(const char *user, const char *password, bool use_minio);
+static Aws::S3::S3Client* s3_client_open(const char *user, const char *password, bool use_minio, const char *endpoint, const char *awsRegion);
 static void s3_client_close(Aws::S3::S3Client *s3_client);
 
 extern "C" void
@@ -338,21 +341,26 @@ create_s3_connection(ForeignServer *server, UserMapping *user, bool use_minio)
 		int			n;
 		char *id = NULL;
 		char *password = NULL;
+		char *awsRegion = NULL;
+		char *endpoint = NULL;
 		ListCell   *lc;
+		List *lst_options = NULL;
 
-		n = list_length(user->options) + 1;
+		lst_options = list_concat(lst_options, user->options);
+		lst_options = list_concat(lst_options, server->options);
+		n = list_length(lst_options) + 1;
 		keywords = (const char **) palloc(n * sizeof(char *));
 		values = (const char **) palloc(n * sizeof(char *));
-
-		n = ExtractConnectionOptions(user->options,
+		
+		n = ExtractConnectionOptions( lst_options,
 									  keywords, values);
 		keywords[n] = values[n] = NULL;
 
 		/* verify connection parameters and make connection */
 		check_conn_params(keywords, values, user);
 
-		/* get id and password from user option */
-		foreach(lc, user->options)
+		/* get id, password, region and endpoint from user and server options */
+		foreach(lc, lst_options)
 		{
 			DefElem    *def = (DefElem *) lfirst(lc);
 
@@ -361,9 +369,15 @@ create_s3_connection(ForeignServer *server, UserMapping *user, bool use_minio)
 
 			if (strcmp(def->defname, "password") == 0)
 				password = defGetString(def);
+
+			if (strcmp(def->defname, "region") == 0)
+				awsRegion = defGetString(def);
+
+			if (strcmp(def->defname, "endpoint") == 0)
+				endpoint = defGetString(def);
 		}
 
-		conn = s3_client_open(id, password, use_minio);
+		conn = s3_client_open(id, password, use_minio, endpoint, awsRegion);
 		if (!conn)
 			ereport(ERROR,
 					(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
@@ -477,7 +491,7 @@ parquet_fdw_inval_callback(Datum arg, int cacheid, uint32 hashvalue)
  * Create S3 handle.
  */
 static Aws::S3::S3Client*
-s3_client_open(const char *user, const char *password, bool use_minio)
+s3_client_open(const char *user, const char *password, bool use_minio, const char *endpoint, const char * awsRegion)
 {
     const Aws::String access_key_id = user;
     const Aws::String secret_access_key = password;
@@ -490,19 +504,19 @@ s3_client_open(const char *user, const char *password, bool use_minio)
 
 	if (use_minio)
 	{
-		const Aws::String endpoint = "127.0.0.1:9000";
+		const Aws::String defaultEndpoint = "127.0.0.1:9000";
 		clientConfig.scheme = Aws::Http::Scheme::HTTP;
-		clientConfig.endpointOverride = endpoint;
+		clientConfig.endpointOverride = endpoint ? (Aws::String) endpoint : defaultEndpoint;
 		s3_client = new Aws::S3::S3Client(cred, clientConfig,
 				Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never, false);
 	}
 	else
 	{
+		const Aws::String defaultRegion = "ap-northeast-1";
 		clientConfig.scheme = Aws::Http::Scheme::HTTPS;
-		clientConfig.region = Aws::Region::AP_NORTHEAST_1;
+		clientConfig.region = awsRegion ? (Aws::String) awsRegion : defaultRegion;
 		s3_client = new Aws::S3::S3Client(cred, clientConfig);
 	}
-
 	return s3_client;
 }
 
@@ -708,15 +722,17 @@ parquetSplitS3Path(const char *dirname, const char *filename, char **bucket, cha
 List*
 parquetGetDirFileList(List *filelist, const char *path)
 {
-    int ret;
+    int         ret;
     struct stat st;
-    DIR *dp;
+    DIR        *dp;
     struct dirent *entry;
+    char       *dirname = pstrdup(path);
+    char       *back;
 
     ret = stat(path, &st);
     if (ret != 0)
         elog(ERROR, "parquet_s3_fdw: cannot stat %s", path);
-    
+
     if ((st.st_mode & S_IFMT) == S_IFREG)
     {
         filelist = lappend(filelist, makeString(pstrdup(path)));
@@ -732,12 +748,19 @@ parquetGetDirFileList(List *filelist, const char *path)
     if (!dp)
         elog(ERROR, "parquet_s3_fdw: cannot open %s", path);
 
+    /* remove redundant slash */
+    back = dirname + strlen(dirname);
+    while (*--back == '/')
+    {
+        *back = '\0';
+    }
+
     entry = readdir(dp);
     while (entry != NULL) {
         char *newpath;
         if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0)
         {
-            newpath = psprintf("%s/%s", path, entry->d_name);
+            newpath = psprintf("%s/%s", dirname, entry->d_name);
             filelist = parquetGetDirFileList(filelist, newpath);
             pfree(newpath);
         }
@@ -771,7 +794,7 @@ parquetImportForeignSchemaS3(ImportForeignSchemaStmt *stmt, Oid serverOid)
         ListCell   *lc;
         bool        skip = false;
         List       *fields;
-        char       *path = strVal((Value *) lfirst(cell));
+        char       *path = strVal((Node *) lfirst(cell));
         char       *filename = pstrdup(path);
         char       *query;
         char       *fullpath;
@@ -1102,4 +1125,41 @@ parquet_s3_fdw_disconnect_all(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_BOOL(disconnect_cached_connections(InvalidOid));
 }
+}
+
+bool
+parquet_upload_file_to_s3(const char *dirname, Aws::S3::S3Client *s3_client, const char *filename, const char *local_file)
+{
+    char           *bucket;
+    char           *filepath;
+    Aws::S3::Model::PutObjectRequest request;
+    std::shared_ptr<Aws::IOStream> input_data;
+    Aws::S3::Model::PutObjectOutcome outcome;
+
+    parquetSplitS3Path(dirname, filename, &bucket, &filepath);
+    request.SetBucket(bucket);
+
+    /*
+     * We are using the name of the file as the key for the object in the bucket.
+     */
+    request.SetKey(filepath);
+
+    /* load local file to update */
+    input_data = Aws::MakeShared<Aws::FStream>("PutObjectInputStream",
+                 local_file,
+                 std::ios_base::in | std::ios_base::binary);
+
+    request.SetBody(input_data);
+    outcome = s3_client->PutObject(request);
+
+    if (outcome.IsSuccess())
+    {
+        elog(DEBUG1, "parquet_s3_fdw: added object '%s' to bucket '%s'.", filepath, bucket);
+        return true;
+    }
+    else
+    {
+        elog(ERROR, "parquet_s3_fdw: PutObject: %s", outcome.GetError().GetMessage().c_str());
+        return false;
+    }
 }

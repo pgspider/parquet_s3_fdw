@@ -1,0 +1,145 @@
+\set ECHO none
+show server_version \gset
+\ir sql/:server_version/schemaless/import.sql
+SET datestyle = 'ISO';
+SET client_min_messages = WARNING;
+SET log_statement TO 'none';
+--Testcase 1:
+CREATE EXTENSION parquet_s3_fdw;
+--Testcase 2:
+DROP ROLE IF EXISTS regress_parquet_s3_fdw;
+--Testcase 3:
+CREATE ROLE regress_parquet_s3_fdw LOGIN SUPERUSER;
+--Testcase 4:
+CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw :USE_MINIO;
+--Testcase 5:
+CREATE USER MAPPING FOR regress_parquet_s3_fdw SERVER parquet_s3_srv :USER_PASSWORD;
+SET ROLE regress_parquet_s3_fdw;
+-- import foreign schema
+\set var '\"':PATH_FILENAME'\/data\/simple\"'
+IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO public OPTIONS (sorted 'one', schemaless 'true');
+--Testcase 6:
+\d
+                     List of relations
+ Schema |   Name   |     Type      |         Owner          
+--------+----------+---------------+------------------------
+ public | example1 | foreign table | regress_parquet_s3_fdw
+ public | example2 | foreign table | regress_parquet_s3_fdw
+(2 rows)
+
+--Testcase 7:
+SELECT * FROM example2;
+                                                       v                                                       
+---------------------------------------------------------------------------------------------------------------
+ {"one": 1, "six": "t", "two": [19, 20], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "three": "eins"}
+ {"one": 3, "six": "f", "two": [21, 22], "five": "2018-01-03", "four": "2018-01-03 00:00:00", "three": "zwei"}
+ {"one": 5, "six": "t", "two": [23, 24], "five": "2018-01-05", "four": "2018-01-05 00:00:00", "three": "drei"}
+ {"one": 7, "six": "f", "two": [25, 26], "five": "2018-01-07", "four": "2018-01-07 00:00:00", "three": "vier"}
+ {"one": 9, "six": "t", "two": [27, 28], "five": "2018-01-09", "four": "2018-01-09 00:00:00", "three": "fünf"}
+(5 rows)
+
+-- import_parquet
+--Testcase 8:
+CREATE FUNCTION list_parquet_s3_files(args jsonb)
+RETURNS text[] as
+$$
+    SELECT array_agg(args->>'dir' || filename)
+    FROM (VALUES
+        ('/example1.parquet', 'simple'),
+        ('/example2.parquet', 'simple'),
+        ('/example3.parquet', 'complex')
+    ) AS files(filename, filetype)
+    WHERE filetype = args->>'type';
+$$
+LANGUAGE SQL;
+\set var  '{"dir": "':PATH_FILENAME'/data/simple", "type": "simple"}'
+--Testcase 9:
+SELECT import_parquet_s3(
+    'example_import',
+    'public',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one", "schemaless":"true"}');
+ import_parquet_s3 
+-------------------
+ 
+(1 row)
+
+--Testcase 10:
+SELECT * FROM example_import ORDER BY (v->>'one')::int8, (v->>'three')::text;
+                                                                v                                                                
+---------------------------------------------------------------------------------------------------------------------------------
+ {"one": 1, "six": "t", "two": [19, 20], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "three": "eins"}
+ {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
+ {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
+ {"one": 3, "six": "t", "two": [7, 8, 9], "five": "2018-01-03", "four": "2018-01-03 00:00:00", "seven": 1, "three": "baz"}
+ {"one": 3, "six": "f", "two": [21, 22], "five": "2018-01-03", "four": "2018-01-03 00:00:00", "three": "zwei"}
+ {"one": 4, "six": "f", "two": [10, 11, 12], "five": "2018-01-04", "four": "2018-01-04 00:00:00", "seven": 1.5, "three": "uno"}
+ {"one": 5, "six": "f", "two": [13, 14, 15], "five": "2018-01-05", "four": "2018-01-05 00:00:00", "seven": null, "three": "dos"}
+ {"one": 5, "six": "t", "two": [23, 24], "five": "2018-01-05", "four": "2018-01-05 00:00:00", "three": "drei"}
+ {"one": 6, "six": "f", "two": [16, 17, 18], "five": "2018-01-06", "four": "2018-01-06 00:00:00", "seven": 2, "three": "tres"}
+ {"one": 7, "six": "f", "two": [25, 26], "five": "2018-01-07", "four": "2018-01-07 00:00:00", "three": "vier"}
+ {"one": 9, "six": "t", "two": [27, 28], "five": "2018-01-09", "four": "2018-01-09 00:00:00", "three": "fünf"}
+(11 rows)
+
+--Testcase 11:
+SELECT import_parquet_s3_explicit(
+    'example_import2',
+    'public',
+    'parquet_s3_srv',
+    array['one', 'three', 'six'],
+    array['int8', 'text', 'bool']::regtype[],
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one", "schemaless":"true"}');
+psql:sql/15.0/schemaless/import.sql:61: WARNING:  parquet_s3_fdw: Attnames and atttypes are expected to be NULL. They are meaningless for schemaless table.
+HINT:  Schemaless table imported always contain "v" column with "jsonb" type.
+ import_parquet_s3_explicit 
+----------------------------
+ 
+(1 row)
+
+--Testcase 12:
+SELECT * FROM example_import2;
+                                                                v                                                                
+---------------------------------------------------------------------------------------------------------------------------------
+ {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
+ {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
+ {"one": 3, "six": "t", "two": [7, 8, 9], "five": "2018-01-03", "four": "2018-01-03 00:00:00", "seven": 1, "three": "baz"}
+ {"one": 4, "six": "f", "two": [10, 11, 12], "five": "2018-01-04", "four": "2018-01-04 00:00:00", "seven": 1.5, "three": "uno"}
+ {"one": 5, "six": "f", "two": [13, 14, 15], "five": "2018-01-05", "four": "2018-01-05 00:00:00", "seven": null, "three": "dos"}
+ {"one": 6, "six": "f", "two": [16, 17, 18], "five": "2018-01-06", "four": "2018-01-06 00:00:00", "seven": 2, "three": "tres"}
+ {"one": 1, "six": "t", "two": [19, 20], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "three": "eins"}
+ {"one": 3, "six": "f", "two": [21, 22], "five": "2018-01-03", "four": "2018-01-03 00:00:00", "three": "zwei"}
+ {"one": 5, "six": "t", "two": [23, 24], "five": "2018-01-05", "four": "2018-01-05 00:00:00", "three": "drei"}
+ {"one": 7, "six": "f", "two": [25, 26], "five": "2018-01-07", "four": "2018-01-07 00:00:00", "three": "vier"}
+ {"one": 9, "six": "t", "two": [27, 28], "five": "2018-01-09", "four": "2018-01-09 00:00:00", "three": "fünf"}
+(11 rows)
+
+\set var  '{"dir": "':PATH_FILENAME'/data/complex", "type": "complex"}'
+--Testcase 13:
+SELECT import_parquet_s3(
+    'example_import3',
+    'public',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"schemaless":"true"}');
+ import_parquet_s3 
+-------------------
+ 
+(1 row)
+
+--Testcase 14:
+SELECT * FROM example_import3;
+                                                   v                                                    
+--------------------------------------------------------------------------------------------------------
+ {"one": {"1": "foo", "2": "bar", "3": "baz"}, "two": {"2018-01-01": 10, "2018-01-02": 15}, "three": 1}
+ {"one": {"4": "test1", "5": "test2"}, "two": {"2018-01-03": 20, "2018-01-04": 25}, "three": 2}
+(2 rows)
+
+--Testcase 15:
+DROP FUNCTION list_parquet_s3_files;
+--Testcase 16:
+DROP EXTENSION parquet_s3_fdw CASCADE;

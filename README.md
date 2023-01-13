@@ -1,7 +1,7 @@
 # Parquet S3 Foreign Data Wrapper for PostgreSQL
 
 This PostgreSQL extension is a Foreign Data Wrapper (FDW) for accessing Parquet file on local file system and [Amazon S3][2].
-This version of parquet_s3_fdw can work for PostgreSQL 13.
+This version of parquet_s3_fdw can work for PostgreSQL 13, 14 and 15.
 
 Read-only Apache Parquet foreign data wrapper supporting S3 access for PostgreSQL.
 
@@ -10,7 +10,7 @@ Read-only Apache Parquet foreign data wrapper supporting S3 access for PostgreSQ
 ### 1. Install dependent libraries
 `parquet_s3_fdw` requires `libarrow` and `libparquet` installed in your system (requires version 0.15+, for previous versions use branch [arrow-0.14](https://github.com/adjust/parquet_fdw/tree/arrow-0.14)). Please refer to [building guide](https://github.com/apache/arrow/blob/master/docs/source/developers/cpp/building.rst).
 
-`AWS SDK for C++ (libaws-cpp-sdk-core libaws-cpp-sdk-s3)` is also required (Confirmed version is 1.8.14).
+`AWS SDK for C++ (libaws-cpp-sdk-core libaws-cpp-sdk-s3)` is also required (Confirmed version is 1.9.263).
 
 Attention!  
 We reccomend to build `libarrow`, `libparquet` and `AWS SDK for C++` from the source code. We failed to link if using pre-compiled binaries because gcc version is different between arrow and AWS SDK.
@@ -77,6 +77,8 @@ Following options are supported:
 * **files_func** - user defined function that is used by parquet_s3_fdw to retrieve the list of parquet files on each query; function must take one `JSONB` argument and return text array of full paths to parquet files;
 * **files_func_arg** - argument for the function, specified by **files_func**.
 * **max_open_files** - the limit for the number of Parquet files open simultaneously.
+* **region** - the value of AWS region used to connect to (default `ap-northeast-1`).
+* **endpoint** - the address and port used to connect to (default `127.0.0.1:9000`).
 
 Foreign table may be created for a single Parquet file and for a set of files. It is also possible to specify a user defined function, which would return a list of file paths. Depending on the number of files and table options `parquet_s3_fdw` may use one of the following execution strategies:
 
@@ -176,6 +178,7 @@ SELECT import_parquet_s3_explicit(
 
 ## Features
 - Support SELECT of parquet file on local file system or Amazon S3.
+- Support INSERT, DELETE, UPDATE (Foreign modification).
 - Support MinIO access instead of Amazon S3.
 - Allow control over whether foreign servers keep connections open after transaction completion. This is controlled by keep_connections and defaults to on.
 - Support parquet_s3_fdw function parquet_s3_fdw_get_connections() to report open foreign server connections.
@@ -298,23 +301,247 @@ SELECT import_parquet_s3_explicit(
 
 - For other feature, `schemaless` mode works same as `non-schemaless` mode.
 
+## Write-able FDW
+The user can issue an insert, update and delete statement for the foreign table, which has set the key columns.
+
+### Key columns
+- in non-schemaless mode: The key columns can be set while creating a parquet_s3_fdw foreign table object with OPTIONS(key 'true'):
+```sql
+CREATE FOREIGN TABLE userdata (
+    id1          int OPTIONS(key 'true'),
+    id2          int OPTIONS(key 'true'),
+    first_name   text,
+    last_name    text
+) SERVER parquet_s3_srv
+OPTIONS (
+    filename 's3://bucket/dir/userdata1.parquet'
+);
+```
+- in schemaless mode The key columns can be set while creating a parquet_s3_fdw foreign table object with `key_columns` option:
+```sql
+CREATE FOREIGN TABLE userdata (
+    v JSONB
+) SERVER parquet_s3_srv
+OPTIONS (
+    filename 's3://bucket/dir/userdata1.parquet',
+    schemaless 'true',
+    key_columns 'id1 id2'
+);
+```
+- `key_columns` option can be use in IMPORT FOREIGN SCHEMA feature:
+```sql
+-- in schemaless mode
+IMPORT FOREIGN SCHEMA 's3://data/' FROM SERVER parquet_s3_srv INTO tmp_schema
+OPTIONS (sorted 'c1', schemaless 'true', key_columns 'id1 id2');
+-- corresponding CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE tbl1 (
+      v jsonb
+) SERVER parquet_s3_srv
+OPTIONS (filename 's3://data/tbl1.parquet', sorted 'c1', schemaless 'true', key_columns 'id1 id2');
+
+-- in non-schemaless mode
+IMPORT FOREIGN SCHEMA 's3://data/' FROM SERVER parquet_s3_srv INTO tmp_schema
+OPTIONS (sorted 'c1', schemaless 'true', key_columns 'id1 id2');
+-- corresponding CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE tbl1 (
+      id1 INT OPTIONS (key 'true'),
+      id2 INT OPTIONS (key 'true'),
+      c1  TEXT,
+      c2  FLOAT
+) SERVER parquet_s3_srv
+OPTIONS (filename 's3://data/tbl1.parquet', sorted 'c1');
+```
+### insert_file_selector option
+User defined function signature that is used by parquet_s3_fdw to retrieve the target parquet file on INSERT query:
+```sql
+CREATE FUNCTION insert_file_selector_func(one INT8, dirname text)
+RETURNS TEXT AS
+$$
+    SELECT (dirname || '/example7.parquet')::TEXT;
+$$
+LANGUAGE SQL;
+
+CREATE FOREIGN TABLE example_func (one INT8 OPTIONS (key 'true'), two TEXT)
+SERVER parquet_s3_srv
+OPTIONS (
+    insert_file_selector 'insert_file_selector_func(one, dirname)',
+    dirname '/tmp/data_local/data/test',
+    sorted 'one');
+```
+- insert_file_selector function signature spec:
+  - Syntax: `[function name]([arg name] , [arg name] ...)`
+  - Default return type is `TEXT` (full paths to parquet file)
+  - `[arg name]`: must be foreign table column name or `dirname`
+  - args value:
+    - `dirname` arg: value of dirname option.
+    - `column` args: get from inserted slot by name.
+
+### Sorted columns:
+parquet_s3_fdw supports keeping the sorted column still sorted in the modify feature.
+
+### Parquet file schema:
+Basically, the parquet file schema is defined according to a list of column names and corresponding types, but in parquet_s3_fdw's scan, it assumes that all columns with the same name have the same type. So, in modify feature, this assumption will be use also.
+
+### Type mapping from postgres to arrow type:
+- primitive type mapping:
+  |        SQL type        |   Arrow type |
+  |-----------------------:|-------------:|
+  |                   BOOL |         BOOL |
+  |                   INT2 |        INT16 |
+  |                   INT4 |        INT32 |
+  |                   INT8 |        INT64 |
+  |                 FLOAT4 |        FLOAT |
+  |                 FLOAT8 |       DOUBLE |
+  |  TIMESTAMP/TIMESTAMPTZ |    TIMESTAMP |
+  |                   DATE |       DATE32 |
+  |                   TEXT |       STRING |
+  |                  BYTEA |       BINARY |
+- Default time precision for arrow::TIMESTAMP is microsecond an in UTC timezone.
+- LIST are created by its element type, just support primitive type for element.
+- MAP are created by its jsonb element type:
+  |  jsonb type   |   Arrow type |
+  |--------------:|-------------:|
+  |          text |       STRING |
+  |       numeric |       FLOAT8 |
+  |       boolean |         BOOL |
+  |          null |       STRING |
+  |   other types |       STRING |
+
+- In schemaless mode:
+  - The mapping for primitive jsonb type is same as MAP in non-schemaless mode.
+  - For first nested jsonb in schemaless mode:
+    |  jsonb type   |   Arrow type |
+    |--------------:|-------------:|
+    |         array |         LIST |
+    |        object |          MAP |
+  - Element type of LIST and MAP is same as MAP type in non-schemaless mode.
+
+### INSERT
+```sql
+-- non-schemaless mode
+CREATE FOREIGN TABLE example_insert (
+    c1 INT2 OPTIONS (key 'true'),
+    c2 TEXT,
+    c3 BOOLEAN
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example_insert.parquet');
+
+INSERT INTO example_insert VALUES (1, 'text1', true), (2, DEFAULT, false), ((select 3), (select i from (values('values are fun!')) as foo (i)), true);
+INSERT 0 3
+
+SELECT * FROM example_insert;
+ c1 |       c2        | c3 
+----+-----------------+----
+  1 | text1           | t
+  2 |                 | f
+  3 | values are fun! | t
+(3 rows)
+
+-- schemaless mode
+CREATE FOREIGN TABLE example_insert_schemaless (
+    v JSONB
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example_insert.parquet', schemaless 'true', key_column 'c1');
+
+INSERT INTO example_insert_schemaless VALUES ('{"c1": 1, "c2": "text1", "c3": true}'), ('{"c1": 2, "c2": null, "c3": false}'), ('{"c1": 3, "c2": "values are fun!", "c3": true}');
+
+SELECT * FROM example_insert_schemaless;
+                       v                       
+-----------------------------------------------
+ {"c1": 1, "c2": "text1", "c3": "t"}
+ {"c1": 2, "c2": null, "c3": "f"}
+ {"c1": 3, "c2": "values are fun!", "c3": "t"}
+(3 rows)
+
+```
+- Select file to insert:
+  - In case, option `insert_file_selector` exists, target file is the result of this function.
+    - If target file does not exist, create new file with the same name of target file.
+    - If target file exists, but its schema does not match with list columns of insert record, an error message will be raised.
+  - In case, option `insert_file_selector` does not exist:
+    - target file is the first file whose schema matches the inserted record (all columns of inserted record exist in  the target file).
+    - If no file that meets its schema matches the columns of insert record and `dirname` option has specified. Creating new file with name format:
+    ``` [foreign_table_name]_[date_time].parquet ```
+    - Otherwise, an error message will be raised.
+- The new file schema:
+  - In non-schemaless mode, the new file will have all columns existed in foreign table.
+  - In schemaless mode, the new file will have all column specify in jsonb value.
+  - Column information:
+    - Get from existed file list.
+    - If column does not exist in any file: create bases on [pre-defined mapping type](#type-mapping-from-postgres-to-arrow-type).
+### UPDATE/DELETE
+```sql
+-- non-schemaless mode
+CREATE FOREIGN TABLE example (
+    c1 INT2 OPTIONS (key 'true'),
+    c2 TEXT,
+    c3 BOOLEAN
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example.parquet');
+
+SELECT * FROM example;
+ c1 |       c2        | c3 
+----+-----------------+----
+  1 | text1           | t
+  2 |                 | f
+  3 | values are fun! | t
+(3 rows)
+
+UPDATE example SET c3 = false WHERE c2 = 'text1';
+UPDATE 1
+
+SELECT * FROM example;
+ c1 |       c2        | c3 
+----+-----------------+----
+  1 | text1           | f
+  2 |                 | f
+  3 | values are fun! | t
+(3 rows)
+
+DELETE FROM example WHERE c1 = 2;
+DELETE 1
+
+SELECT * FROM example;
+ c1 |       c2        | c3 
+----+-----------------+----
+  1 | text1           | f
+  3 | values are fun! | t
+(2 rows)
+
+-- schemaless mode
+CREATE FOREIGN TABLE example_schemaless (
+    v JSONB
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example.parquet', schemaless 'true', key_columns 'c1');
+
+SELECT * FROM example_schemaless;
+                       v                       
+-----------------------------------------------
+ {"c1": 1, "c2": "text1", "c3": "t"}
+ {"c1": 2, "c2": null, "c3": "f"}
+ {"c1": 3, "c2": "values are fun!", "c3": "t"}
+(3 rows)
+
+UPDATE example_schemaless SET v='{"c3":false}' WHERE v->>'c2' = 'text1';
+UPDATE 1
+
+SELECT * FROM example_schemaless;
+                       v                       
+-----------------------------------------------
+ {"c1": 1, "c2": "text1", "c3": "f"}
+ {"c1": 2, "c2": null, "c3": "f"}
+ {"c1": 3, "c2": "values are fun!", "c3": "t"}
+(3 rows)
+
+DELETE FROM example_schemaless WHERE (v->>'c1')::int = 2;
+DELETE 1
+
+SELECT * FROM example_schemaless;
+                       v                       
+-----------------------------------------------
+ {"c1": 1, "c2": "text1", "c3": "f"}
+ {"c1": 3, "c2": "values are fun!", "c3": "t"}
+(2 rows)
+```
 ## Limitations
-- Modification (INSERT, UPDATE and DELETE) is not supported.
 - Transaction is not supported.
 - Cannot create a single foreign table using parquet files on both file system and Amazon S3.
-- AWS region is hard-coded as "ap-northeast-1". If you want to use another region, you need to modify the source code by changing "AP_NORTHEAST_1" in parquet_s3_fdw_connection.cpp.
-- For the query that return record type, parquet s3 fdw only fills data for columns which are refered in target list or clause. For other columns, they are filled as NULL.     
-Example:    
-    ```sql
-    -- column c1 and c3 are refered in ORDER BY clause, so it will be filled with values. For other columns: c2,c4,c5,c6 filled as NULL.
-    SELECT t1 FROM tbl t1 ORDER BY tbl.c3, tbl.c1;     
-            t1              
-    ------------------      
-     (101,,00101,,,,)       
-     (102,,00102,,,,)       
-    (2 rows) 
-    ```  
-
 - The 4th and 5th arguments of `import_parquet_s3_explicit()` function are meaningless in `schemaless` mode.
   - These arguments should be defined as `NULL` value.
   - If these arguments is not NULL value the `WARNING` below will occur:
@@ -323,6 +550,15 @@ Example:
     HINT: Schemaless table imported always contain "v" column with "jsonb" type.
     ```
 - `schemaless` mode does not support create partition table by `CREATE TABLE parent_tbl (v jsonb) PARTITION BY RANGE((v->>'a')::int)`.
+- In modifying features:
+  - `parquet_s3_fdw` modifies the parquet file by creating a modifiable cache data from the target parquet file and overwriting the old one:
+    - Performance won't be good for large files.
+    - When exact same file is modifying concurrently, the result would be inconsistent.
+  - WITH CHECK OPTION, ON CONFLICT and RETURNING are not supported.
+  - `sorted` columns only supports the following types: `int2`, `int4`, `int8`, `date`, `timestamp`, `float4`, `float8`.
+  - `key` columns only supports the following types: `int2`, `int4`, `int8`, `date`, `timestamp`, `float4`, `float8` and `text`.
+  - `key` columns values must be unique, `parquet_s3_fdw` does not support checking for unique values for key columns, user must do that.
+  - `key` columns only required for UPDATE/DELETE.
 
 ## Contributing
 Opening issues and pull requests on GitHub are welcome.

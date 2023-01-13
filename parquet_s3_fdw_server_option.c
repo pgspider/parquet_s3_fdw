@@ -3,7 +3,7 @@
  * parquet_s3_fdw_server_option.c
  *		  Server option management for parquet_s3_fdw
  *
- * Portions Copyright (c) 2021, TOSHIBA CORPORATION
+ * Portions Copyright (c) 2020, TOSHIBA CORPORATION
  *
  * IDENTIFICATION
  *		  contrib/parquet_s3_fdw/parquet_s3_fdw_server_option.c
@@ -45,6 +45,11 @@ parquet_s3_is_valid_server_option(DefElem *def)
 							def->defname, defGetString(def))));
 		return true;
 	}
+	if (strcmp(def->defname, SERVER_OPTION_REGION) == 0 ||
+		strcmp(def->defname, SERVER_OPTION_ENDPOINT) == 0)
+	{
+		return true;
+	}
 
 	return false;
 }
@@ -66,6 +71,10 @@ parquet_s3_extract_options(List *options, parquet_s3_server_opt * opt)
 			opt->use_minio = defGetBoolean(def);
 		else if (strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0)
 			opt->keep_connections = defGetBoolean(def);
+		else if (strcmp(def->defname, SERVER_OPTION_REGION) == 0)
+			opt->region = defGetString(def);
+		else if (strcmp(def->defname, SERVER_OPTION_ENDPOINT) == 0)
+			opt->endpoint = defGetString(def);
 	}
 }
 
@@ -89,6 +98,8 @@ parquet_s3_get_options(Oid foreignoid)
 	opt->use_minio = false;
 	/* By default, all the connections to any foreign servers are kept open. */
 	opt->keep_connections = true;
+	opt->region = "ap-northeast-1";
+	opt->endpoint = "127.0.0.1:9000";
 
 	/*
 	 * Extract options from FDW objects.
@@ -136,6 +147,8 @@ parquet_s3_get_server_options(Oid serverid)
 	opt->use_minio = false;
 	/* By default, all the connections to any foreign servers are kept open. */
 	opt->keep_connections = true;
+	opt->region = "ap-northeast-1";
+	opt->endpoint = "127.0.0.1:9000";
 
 	/* Get server options. */
 	f_server = GetForeignServer(serverid);

@@ -3,7 +3,7 @@
  * parquet_fdw.c
  *		  FDW routines for parquet_s3_fdw
  *
- * Portions Copyright (c) 2021, TOSHIBA CORPORATION
+ * Portions Copyright (c) 2020, TOSHIBA CORPORATION
  * Portions Copyright (c) 2018-2019, adjust GmbH
  *
  * IDENTIFICATION
@@ -24,6 +24,7 @@
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/elog.h"
+#include "nodes/execnodes.h"
 #include "parquet_s3_fdw.h"
 
 
@@ -51,6 +52,38 @@ extern TupleTableSlot *parquetIterateForeignScan(ForeignScanState *node);
 extern void parquetBeginForeignScan(ForeignScanState *node, int eflags);
 extern void parquetEndForeignScan(ForeignScanState *node);
 extern void parquetReScanForeignScan(ForeignScanState *node);
+extern void parquetAddForeignUpdateTargets(
+#if (PG_VERSION_NUM >= 140000)
+											 PlannerInfo *root,
+											 Index rtindex,
+#else
+											 Query *parsetree,
+#endif
+											 RangeTblEntry *target_rte,
+											 Relation target_relation);
+extern List* parquetPlanForeignModify(PlannerInfo *root,
+									  ModifyTable *plan,
+									  Index resultRelation,
+									  int subplan_index);
+extern void parquetBeginForeignModify(ModifyTableState *mtstate,
+									  ResultRelInfo *resultRelInfo,
+									  List *fdw_private,
+									  int subplan_index,
+									  int eflags);
+extern void parquetEndForeignModify(EState *estate,
+									ResultRelInfo *resultRelInfo);
+extern TupleTableSlot *parquetExecForeignUpdate(EState *estate,
+												ResultRelInfo *resultRelInfo,
+												TupleTableSlot *slot,
+												TupleTableSlot *planSlot);
+extern TupleTableSlot *parquetExecForeignInsert(EState *estate,
+												ResultRelInfo *resultRelInfo,
+												TupleTableSlot *slot,
+												TupleTableSlot *planSlot);
+extern TupleTableSlot *parquetExecForeignDelete(EState *estate,
+												ResultRelInfo *resultRelInfo,
+												TupleTableSlot *slot,
+												TupleTableSlot *planSlot);
 extern int	parquetAcquireSampleRowsFunc(Relation relation, int elevel,
 										 HeapTuple *rows, int targrows,
 										 double *totalrows,
@@ -159,6 +192,13 @@ parquet_s3_fdw_handler(PG_FUNCTION_ARGS)
 	fdwroutine->InitializeWorkerForeignScan = parquetInitializeWorkerForeignScan;
 	fdwroutine->ShutdownForeignScan = parquetShutdownForeignScan;
 	fdwroutine->ImportForeignSchema = parquetImportForeignSchema;
+	fdwroutine->AddForeignUpdateTargets = parquetAddForeignUpdateTargets;
+	fdwroutine->PlanForeignModify = parquetPlanForeignModify;
+	fdwroutine->BeginForeignModify = parquetBeginForeignModify;
+	fdwroutine->ExecForeignUpdate = parquetExecForeignUpdate;
+	fdwroutine->ExecForeignInsert = parquetExecForeignInsert;
+	fdwroutine->ExecForeignDelete = parquetExecForeignDelete;
+	fdwroutine->EndForeignModify = parquetEndForeignModify;
 
 	PG_RETURN_POINTER(fdwroutine);
 }

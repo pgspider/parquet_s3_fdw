@@ -42,6 +42,8 @@ extern "C"
 #include <aws/s3/S3Client.h>
 #include <parquet/arrow/reader.h>
 
+extern bool parquet_fdw_use_threads;
+
 class ParallelCoordinator
 {
 private:
@@ -148,6 +150,7 @@ protected:
         {
             arrow::Type::type   type_id;
             std::string         type_name;
+            arrow::TimeUnit::type time_precision; /* Only for timestamp column */
         } arrow;
 
         struct
