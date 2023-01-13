@@ -3,7 +3,7 @@
  * parquet_impl.cpp
  *		  Parquet processing implementation for parquet_s3_fdw
  *
- * Portions Copyright (c) 2021, TOSHIBA CORPORATION
+ * Portions Copyright (c) 2020, TOSHIBA CORPORATION
  * Portions Copyright (c) 2018-2019, adjust GmbH
  *
  * IDENTIFICATION
@@ -37,6 +37,8 @@
 #include "reader.hpp"
 #include "common.hpp"
 #include "slvars.hpp"
+#include "modify_reader.hpp"
+#include "modify_state.hpp"
 
 extern "C"
 {
@@ -61,6 +63,7 @@ extern "C"
 #include "nodes/nodeFuncs.h"
 #include "nodes/makefuncs.h"
 #include "nodes/parsenodes.h"
+#include "optimizer/appendinfo.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
@@ -77,8 +80,10 @@ extern "C"
 #include "utils/memdebug.h"
 #include "utils/regproc.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 #include "utils/timestamp.h"
 #include "utils/typcache.h"
+#include "funcapi.h"
 
 #if PG_VERSION_NUM < 120000
 #include "nodes/relation.h"
@@ -104,6 +109,9 @@ extern "C"
 #define PG_GETARG_JSONB_P PG_GETARG_JSONB
 #endif
 
+#define IS_KEY_COLUMN(A)        ((strcmp(def->defname, "key") == 0) && \
+                                 (defGetBoolean(def) == true))
+
 
 bool enable_multifile;
 bool enable_multifile_merge;
@@ -111,8 +119,9 @@ bool enable_multifile_merge;
 
 static void find_cmp_func(FmgrInfo *finfo, Oid type1, Oid type2);
 static void destroy_parquet_state(void *arg);
-
-
+static void parse_function_signature(char *signature, std::string &funcname, std::vector<std::string> &param_names);
+static bool get_column_by_name(const char *name, TupleTableSlot *slot, Oid *type, Datum *value, bool *isnull);
+static List *parse_attributes_list(char *start);
 /*
  * Restriction
  */
@@ -183,6 +192,8 @@ struct ParquetFdwPlanState
     schemaless_info slinfo;     /* Schemaless information */
     List       *slcols;         /* List actual column for schemaless mode */
     Aws::S3::S3Client *s3client;
+    char       *selector_function_name;
+    List       *key_columns;
 };
 
 static void get_filenames_in_dir(ParquetFdwPlanState *fdw_private);
@@ -316,7 +327,7 @@ schemaless_extract_rowgroup_filters(List *scan_clauses,
             if (boolExpr->args && list_length(boolExpr->args) != 1)
                 continue;
 
-            if ((attname = parquet_s3_get_slvar((Expr *)linitial(boolExpr->args), slinfo, &atttype)) == NULL && atttype == BOOLOID)
+            if ((attname = parquet_s3_get_slvar((Expr *)linitial(boolExpr->args), slinfo, &atttype)) == NULL || atttype != BOOLOID)
                 continue;
 
             strategy = BTEqualStrategyNumber;
@@ -716,6 +727,7 @@ parse_filenames_list(const char *str)
                         loc = parquetFilenamesValidator(f, loc);
                         filenames = lappend(filenames, makeString(f));
                         state = PS_START;
+                        f = NULL;
                         break;
                     default:
                         break;
@@ -729,6 +741,7 @@ parse_filenames_list(const char *str)
                         loc = parquetFilenamesValidator(f, loc);
                         filenames = lappend(filenames, makeString(f));
                         state = PS_START;
+                        f = NULL;
                         break;
                     default:
                         break;
@@ -739,8 +752,11 @@ parse_filenames_list(const char *str)
         }
         cur++;
     }
-    loc = parquetFilenamesValidator(f, loc);
-    filenames = lappend(filenames, makeString(f));
+    if (f != NULL)
+    {
+        loc = parquetFilenamesValidator(f, loc);
+        filenames = lappend(filenames, makeString(f));
+    }
 
     return filenames;
 }
@@ -753,7 +769,7 @@ parquet_s3_column_is_existed(parquet::arrow::SchemaManifest manifest, char *colu
         auto       &field = schema_field.field;
         char        arrow_colname[NAMEDATALEN];
 
-        if (field->name().length() > NAMEDATALEN)
+        if (field->name().length() > NAMEDATALEN - 1)
             throw Error("parquet column name '%s' is too long (max: %d)",
                         field->name().c_str(), NAMEDATALEN - 1);
         tolowercase(field->name().c_str(), arrow_colname);
@@ -879,7 +895,7 @@ extract_rowgroups_list(const char *filename,
                         && field->type()->id() != arrow::Type::MAP)
                         continue;
 
-                    if (field->name().length() > NAMEDATALEN)
+                    if (field->name().length() > NAMEDATALEN - 1)
                         throw Error("parquet column name '%s' is too long (max: %d)",
                                     field->name().c_str(), NAMEDATALEN - 1);
                     tolowercase(field->name().c_str(), arrow_colname);
@@ -1118,6 +1134,7 @@ create_foreign_table_query(const char *tablename,
     ListCell       *lc;
     bool		    schemaless = false;
     bool            is_first = true;
+    List           *key_columns = NIL;
 
     /* list options */
     foreach(lc, options)
@@ -1125,7 +1142,9 @@ create_foreign_table_query(const char *tablename,
         DefElem *def = (DefElem *) lfirst(lc);
 
         if (strcmp(def->defname, "schemaless") == 0)
-			schemaless = defGetBoolean(def);
+            schemaless = defGetBoolean(def);
+        else if (strcmp(def->defname, "key_columns") == 0)
+            key_columns = parse_attributes_list(pstrdup(defGetString(def)));
     }
 
     initStringInfo(&str);
@@ -1160,6 +1179,22 @@ create_foreign_table_query(const char *tablename,
                 appendStringInfo(&str, "%s %s", quote_identifier(name), type_name);
                 is_first = false;
             }
+
+            if (key_columns)
+            {
+                ListCell *lc2;
+
+                foreach (lc2, key_columns)
+                {
+                    char   *key_column_name = (char *) lfirst(lc2);
+
+                    if (strcmp(name, key_column_name) == 0)
+                    {
+                        appendStringInfo(&str, " OPTIONS (key 'true')");
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -1184,6 +1219,10 @@ create_foreign_table_query(const char *tablename,
     {
         DefElem *def = (DefElem *) lfirst(lc);
 
+        /* ignore key_columns in non schemaless mode */
+        if (!schemaless && strcmp(def->defname, "key_columns") == 0)
+            continue;
+
         appendStringInfo(&str, ", %s '%s'", def->defname, defGetString(def));
     }
 
@@ -1201,12 +1240,29 @@ destroy_parquet_state(void *arg)
         delete festate;
 }
 
+static void
+destroy_parquet_modify_state(void *arg)
+{
+    ParquetS3FdwModifyState *fmstate = (ParquetS3FdwModifyState *) arg;
+
+    if (fmstate && fmstate->has_s3_client())
+    {
+        /*
+         * After modify, parquet file information on S3 server is different with cached one,
+         * so, disable connection imediately after modify to reload this infomation.
+         */
+        parquet_disconnect_s3_server();
+        delete fmstate;
+    }
+
+}
+
 /*
  * C interface functions
  */
 
 static List *
-parse_attributes_list(char *start, Oid relid)
+parse_attributes_list(char *start)
 {
     List      *attrs = NIL;
     char      *token;
@@ -1248,6 +1304,39 @@ OidFunctionCall1NullableArg(Oid functionId, Datum arg, bool argisnull)
     fcinfo->args[0].value = arg;
     fcinfo->args[0].isnull = argisnull;
 #endif
+
+    result = FunctionCallInvoke(fcinfo);
+
+    /* Check for null result, since caller is clearly not expecting one */
+    if (fcinfo->isnull)
+        elog(ERROR, "parquet_s3_fdw: function %u returned NULL", flinfo.fn_oid);
+
+    return result;
+}
+
+/*
+ * OidFunctionCallnNullableArg
+ *      Practically a copy-paste from FunctionCall2Coll with added capability
+ *      of passing a NULL argument.
+ */
+static Datum
+OidFunctionCallnNullableArg(Oid functionId, Datum *args, bool *arg_isnulls, int nargs)
+{
+	FunctionCallInfo fcinfo;
+    FmgrInfo    flinfo;
+    Datum		result;
+    int         i;
+
+    fcinfo = (FunctionCallInfo) palloc0(SizeForFunctionCallInfo(nargs));
+
+    fmgr_info(functionId, &flinfo);
+    InitFunctionCallInfoData(*fcinfo, &flinfo, 2, InvalidOid, NULL, NULL);
+
+    for (i = 0; i < nargs; i++)
+    {
+        fcinfo->args[i].value = args[i];
+        fcinfo->args[i].isnull = arg_isnulls[i];
+    }
 
     result = FunctionCallInvoke(fcinfo);
 
@@ -1315,6 +1404,7 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
     fdw_private->max_open_files = 0;
     fdw_private->files_in_order = false;
     fdw_private->schemaless = false;
+    fdw_private->key_columns = NIL;
     table = GetForeignTable(relid);
 
     foreach(lc, table->options)
@@ -1336,7 +1426,7 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
         else if (strcmp(def->defname, "sorted") == 0)
         {
             fdw_private->attrs_sorted =
-                parse_attributes_list(defGetString(def), relid);
+                parse_attributes_list(defGetString(def));
         }
         else if (strcmp(def->defname, "use_mmap") == 0)
         {
@@ -1353,7 +1443,11 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
         else if (strcmp(def->defname, "max_open_files") == 0)
         {
             /* check that int value is valid */
+#if PG_VERSION_NUM >= 150000
+            fdw_private->max_open_files = pg_strtoint32(defGetString(def));
+#else
             fdw_private->max_open_files = pg_atoi(defGetString(def), sizeof(int32), '\0');
+#endif
         }
         else if (strcmp(def->defname, "files_in_order") == 0)
         {
@@ -1362,6 +1456,14 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
         else if (strcmp(def->defname, "schemaless") == 0)
         {
             fdw_private->schemaless = defGetBoolean(def);
+        }
+        else if (strcmp(def->defname, "insert_file_selector") == 0)
+        {
+            fdw_private->selector_function_name = defGetString(def);
+        }
+        else if (strcmp(def->defname, "key_columns") == 0)
+        {
+            fdw_private->key_columns = parse_attributes_list(defGetString(def));
         }
         else
             elog(ERROR, "parquet_s3_fdw: unknown option '%s'", def->defname);
@@ -1427,7 +1529,7 @@ parquetGetForeignRelSize(PlannerInfo *root,
     fdw_private->filenames = NIL;
     foreach (lc, filenames_orig)
     {
-        char *filename = strVal((Value *) lfirst(lc));
+        char *filename = strVal((Node *)lfirst(lc));
         List *rowgroups = extract_rowgroups_list(filename, fdw_private->dirname, fdw_private->s3client, 
                                                  tupleDesc, filters, &matched_rows, &total_rows, fdw_private->schemaless);
 
@@ -1556,7 +1658,7 @@ schemaless_get_sorted_column_type(Aws::S3::S3Client *s3_client, List *file_list,
         arrow::Status   status;
         ReaderCacheEntry *reader_entry  = NULL;
         std::string     error;
-        char           *filename = strVal((Value *) lfirst(lc1));;
+        char           *filename = strVal((Node *) lfirst(lc1));;
         int             attrs_sorted_idx = 0;
 
         /* Open parquet file to read meta information */
@@ -1602,9 +1704,9 @@ schemaless_get_sorted_column_type(Aws::S3::S3Client *s3_client, List *file_list,
                 for (auto &schema_field : manifest.schema_fields)
                 {
                     auto field_name = schema_field.field->name();
-                    char arrow_colname[255];
+                    char arrow_colname[NAMEDATALEN];
 
-                    if (field_name.length() > NAMEDATALEN)
+                    if (field_name.length() > NAMEDATALEN - 1)
                         throw Error("parquet column name '%s' is too long (max: %d)",
                                     field_name.c_str(), NAMEDATALEN - 1);
                     tolowercase(field_name.c_str(), arrow_colname);
@@ -2026,6 +2128,7 @@ parquetGetForeignPlan(PlannerInfo *root,
     }
     else
     {
+        params = lappend(params, makeString((char *) ""));
         params = lappend(params, makeInteger(0));
     }
 
@@ -2085,22 +2188,22 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
                 attrs_sorted = (List *) lfirst(lc);
                 break;
             case FdwScanPrivateUseMmap:
-                use_mmap = (bool) intVal((Value *) lfirst(lc));
+                use_mmap = (bool) intVal((Node *) lfirst(lc));
                 break;
             case FdwScanPrivateUse_Threads:
-                use_threads = (bool) intVal((Value *) lfirst(lc));
+                use_threads = (bool) intVal((Node *) lfirst(lc));
                 break;
             case FdwScanPrivateType:
-                reader_type = (ReaderType) intVal((Value *) lfirst(lc));
+                reader_type = (ReaderType) intVal((Node *) lfirst(lc));
                 break;
             case FdwScanPrivateMaxOpenFiles:
-                max_open_files = intVal((Value *) lfirst(lc));
+                max_open_files = intVal((Node *) lfirst(lc));
                 break;
             case FdwScanPrivateRowGroups:
                 rowgroups_list = (List *) lfirst(lc);
                 break;
             case FdwScanPrivateSchemalessOpt:
-                schemaless = (bool) intVal((Value *) lfirst(lc));
+                schemaless = (bool) intVal((Node *) lfirst(lc));
                 break;
             case FdwScanPrivateSchemalessColumn:
             {
@@ -2113,12 +2216,12 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
                 break;
             }
             case FdwScanPrivateDirName:
-                dirname = (char *) strVal((Value *) lfirst(lc));
+                dirname = (char *) strVal((Node *) lfirst(lc));
                 break;
             case FdwScanPrivateForeignTableId:
             {
                 /* Recreate S3 handle by foreign table id. */
-                Oid s3tableoid = intVal((Value *) lfirst(lc));
+                Oid s3tableoid = intVal((Node *) lfirst(lc));
                 s3client = parquetGetConnectionByTableid(s3tableoid);
                 break;
             }
@@ -2138,7 +2241,7 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
     foreach (lc, attrs_sorted)
     {
         SortSupportData sort_key;
-        char   *attname = (char *) strVal(lfirst(lc));
+        char   *attname = (char *) strVal((Node *)lfirst(lc));
         Oid     typid;
         int     typmod;
         Oid     collid;
@@ -2199,7 +2302,7 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
 
         forboth (lc, filenames, lc2, rowgroups_list)
         {
-            char *filename = strVal((Value *) lfirst(lc));
+            char *filename = strVal((Node *) lfirst(lc));
             List *rowgroups = (List *) lfirst(lc2);
 
             festate->add_file(filename, rowgroups);
@@ -2283,7 +2386,7 @@ parquetEndForeignScan(ForeignScanState *node)
     {
         if (i == FdwScanPrivateForeignTableId)
         {
-            foreigntableid = intVal((Value *) lfirst(lc));
+            foreigntableid = intVal((Node *) lfirst(lc));
             break;
         }
         ++i;
@@ -2357,7 +2460,7 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
 
     foreach (lc, fdw_private.filenames)
     {
-        char *filename = strVal((Value *) lfirst(lc));
+        char *filename = strVal((Node *) lfirst(lc));
 
         try
         {
@@ -2490,7 +2593,7 @@ parquetExplainForeignScan(ForeignScanState *node, ExplainState *es)
 
     fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
     filenames = (List *) linitial(fdw_private);
-    reader_type = (ReaderType) intVal((Value *) list_nth(fdw_private, FdwScanPrivateType));
+    reader_type = (ReaderType) intVal((Node *) list_nth(fdw_private, FdwScanPrivateType));
     rowgroups_list = (List *) list_nth(fdw_private, FdwScanPrivateRowGroups);
 
     switch (reader_type)
@@ -2514,7 +2617,7 @@ parquetExplainForeignScan(ForeignScanState *node, ExplainState *es)
 
     forboth(lc, filenames, lc2, rowgroups_list)
     {
-        char   *filename = strVal((Value *) lfirst(lc));
+        char   *filename = strVal((Node *) lfirst(lc));
         List   *rowgroups = (List *) lfirst(lc2);
         bool    is_first = true;
 
@@ -2630,6 +2733,8 @@ parquetImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
     struct dirent  *f;
     DIR            *d;
     List           *cmds = NIL;
+    char           *dirname = pstrdup(stmt->remote_schema);
+    char           *back;
 
     if (IS_S3_PATH(stmt->remote_schema))
         return parquetImportForeignSchemaS3(stmt, serverOid);
@@ -2642,6 +2747,13 @@ parquetImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
         elog(ERROR, "parquet_s3_fdw: failed to open directory '%s': %s",
              stmt->remote_schema,
              strerror(e));
+    }
+
+    /* remove redundant slash */
+    back = dirname + strlen(dirname);
+    while (*--back == '/')
+    {
+        *back = '\0';
     }
 
     while ((f = readdir(d)) != NULL)
@@ -2657,7 +2769,7 @@ parquetImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
             char       *path;
             char       *query;
 
-            path = psprintf("%s/%s", stmt->remote_schema, filename);
+            path = psprintf("%s/%s", dirname, filename);
 
             /* check that file extension is "parquet" */
             char *ext = strrchr(filename, '.');
@@ -2743,7 +2855,7 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
             foreach(lc, filenames)
             {
                 struct stat stat_buf;
-                char       *fn = strVal((Value *) lfirst(lc));
+                char       *fn = strVal((Node *) lfirst(lc));
 
                if (IS_S3_PATH(fn))
                    continue;
@@ -2834,7 +2946,11 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
         else if (strcmp(def->defname, "max_open_files") == 0)
         {
             /* check that int value is valid */
+#if PG_VERSION_NUM >= 150000
+            pg_strtoint32(defGetString(def));
+#else
             pg_atoi(defGetString(def), sizeof(int32), '\0');
+#endif
         }
         else if (strcmp(def->defname, "files_in_order") == 0)
         {
@@ -2845,6 +2961,14 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
         {
             /* Check that bool value is valid */
 			(void) defGetBoolean(def);
+        }
+        else if (strcmp(def->defname, "insert_file_selector") == 0)
+        {
+            /* We does not have foreign table type here, so do nothing */
+        }
+        else if (strcmp(def->defname, "key_columns") == 0)
+        {
+            /* We does not have foreign table type here, so do nothing */
         }
         else
         {
@@ -3261,4 +3385,619 @@ parquet_s3_extract_slcols(ParquetFdwPlanState *fpinfo, PlannerInfo *root, RelOpt
                                                     fpinfo->slcols, false, NULL, &(fpinfo->slinfo));
     }
 
+}
+
+/*
+ * parquetAddForeignUpdateTargets
+ *      Add resjunk column(s) needed for update/delete on a foreign table
+ */
+extern "C" void
+parquetAddForeignUpdateTargets(
+#if (PG_VERSION_NUM >= 140000)
+                              PlannerInfo *root,
+                              Index rtindex,
+#else
+                              Query *parsetree,
+#endif
+                              RangeTblEntry *target_rte,
+                              Relation target_relation)
+{
+    Oid         relid = RelationGetRelid(target_relation);
+    TupleDesc   tupdesc = target_relation->rd_att;
+    int         i = 0;
+    bool        has_key = false;
+    ForeignTable *table;
+	ListCell   *lc;
+	bool		schemaless_opt = false;
+	bool		key_columns_opt = false;
+
+    table = GetForeignTable(relid);
+
+	foreach (lc, table->options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+		if (strcmp(def->defname, "schemaless") == 0)
+			schemaless_opt = defGetBoolean(def);
+		if (strcmp(def->defname, "key_columns") == 0)
+			key_columns_opt = true;
+	}
+    /* in schemaless mode, add a resjunk for jsonb column as default */
+	if (schemaless_opt)
+    {
+        if (key_columns_opt)
+        {
+            /* loop through all columns of the foreign table */
+            for (i = 0; i < tupdesc->natts; ++i)
+            {
+                Form_pg_attribute att = TupleDescAttr(tupdesc, 0);
+                AttrNumber	attrno = att->attnum;
+                Var		   *var;
+#if PG_VERSION_NUM < 140000
+                Index rtindex = parsetree->resultRelation;
+                TargetEntry *tle;
+#endif
+
+                if (att->attisdropped || att->atttypid != JSONBOID)
+                    continue;
+
+                var = makeVar(rtindex,
+                            attrno,
+                            att->atttypid,
+                            att->atttypmod,
+                            att->attcollation,
+                            0);
+#if (PG_VERSION_NUM >= 140000)
+                add_row_identity_var(root, var, rtindex, pstrdup(NameStr(att->attname)));
+#else
+                /* Wrap it in a resjunk TLE with the right name ... */
+                tle = makeTargetEntry((Expr *) var,
+                                        list_length(parsetree->targetList) + 1,
+                                        pstrdup(NameStr(att->attname)),
+                                        true);
+
+                /* ... and add it to the query's targetlist */
+                parsetree->targetList = lappend(parsetree->targetList, tle);
+#endif
+                has_key = true;
+            }
+        }
+        else
+        {
+            has_key = false;
+        }
+    }
+    else
+    {
+        /* loop through all columns of the foreign table */
+        for (i = 0; i < tupdesc->natts; ++i)
+        {
+            Form_pg_attribute   att = TupleDescAttr(tupdesc, i);
+            AttrNumber          attrno = att->attnum;
+            List               *options;
+            ListCell           *option;
+
+            /* look for the "key" option on this column */
+            options = GetForeignColumnOptions(relid, attrno);
+            foreach(option, options)
+            {
+                DefElem *def = (DefElem *) lfirst(option);
+
+                /* if "key" is set, add a resjunk for this column */
+                if(IS_KEY_COLUMN(def))
+                {
+                    Var *var;
+#if PG_VERSION_NUM < 140000
+                    Index rtindex = parsetree->resultRelation;
+                    TargetEntry *tle;
+#endif
+                    var = makeVar(rtindex,
+                                attrno,
+                                att->atttypid,
+                                att->atttypmod,
+                                att->attcollation,
+                                0);
+#if (PG_VERSION_NUM >= 140000)
+                    add_row_identity_var(root, var, rtindex, pstrdup(NameStr(att->attname)));
+#else
+                    /* Wrap it in a resjunk TLE with the right name ... */
+                    tle = makeTargetEntry((Expr *) var,
+                                        list_length(parsetree->targetList) + 1,
+                                        pstrdup(NameStr(att->attname)),
+                                        true);
+
+                    /* ... and add it to the query's targetlist */
+                    parsetree->targetList = lappend(parsetree->targetList, tle);
+#endif
+                    has_key = true;
+                }
+                else if (strcmp(def->defname, "key") == 0)
+                {
+                    elog(ERROR, "parquet_s3_fdw: impossible column option \"%s\"", def->defname);
+                }
+            }
+        }
+    }
+
+    if (!has_key)
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+                 errmsg("parquet_s3_fdw: no primary key column specified for foreign table")));
+
+}
+
+/*
+ * parquetPlanForeignModify
+ *        Plan an insert/update/delete operation on a foreign table
+ */
+extern "C" List *
+parquetPlanForeignModify(PlannerInfo *root,
+                         ModifyTable *plan,
+                         Index resultRelation,
+                         int subplan_index)
+{
+    CmdType         operation = plan->operation;
+    RangeTblEntry  *rte = planner_rt_fetch(resultRelation, root);
+    List           *targetAttrs = NULL;
+    Relation        rel;
+    List           *keyAttrs = NULL;
+    Oid             foreignTableId;
+    TupleDesc       tupdesc;
+
+    /*
+     * Core code already has some lock on each rel being planned, so we can
+     * use NoLock here.
+     */
+    rel = table_open(rte->relid, NoLock);
+    foreignTableId = RelationGetRelid(rel);
+    tupdesc = RelationGetDescr(rel);
+
+    /*
+     * In an INSERT, we transmit all columns that are defined in the foreign
+     * table.  In an UPDATE, if there are BEFORE ROW UPDATE triggers on the
+     * foreign table, we transmit all columns like INSERT; else we transmit
+     * only columns that were explicitly targets of the UPDATE, so as to avoid
+     * unnecessary data transmission.  (We can't do that for INSERT since we
+     * would miss sending default values for columns not listed in the source
+     * statement, and for UPDATE if there are BEFORE ROW UPDATE triggers since
+     * those triggers might change values for non-target columns, in which
+     * case we would miss sending changed values for those columns.)
+     */
+    if (operation == CMD_INSERT ||
+        (operation == CMD_UPDATE &&
+         rel->trigdesc &&
+         rel->trigdesc->trig_update_before_row))
+    {
+        int     attnum;
+
+        for (attnum = 1; attnum <= tupdesc->natts; attnum++)
+        {
+            Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
+
+            if (!attr->attisdropped)
+                targetAttrs = lappend_int(targetAttrs, attnum);
+        }
+    }
+    else if (operation == CMD_UPDATE)
+    {
+        AttrNumber  col;
+        Bitmapset  *allUpdatedCols = bms_union(rte->updatedCols, rte->extraUpdatedCols);
+
+        col = -1;
+        while ((col = bms_next_member(allUpdatedCols, col)) >= 0)
+        {
+            /* bit numbers are offset by FirstLowInvalidHeapAttributeNumber */
+            AttrNumber  attno = col + FirstLowInvalidHeapAttributeNumber;
+
+            if (attno <= InvalidAttrNumber) /* shouldn't happen */
+                elog(ERROR, "parquet_s3_fdw: system-column update is not supported");
+            targetAttrs = lappend_int(targetAttrs, attno);
+        }
+    }
+
+    /*
+     * Raise error message if there is WITH CHECK OPTION
+     */
+    if (plan->withCheckOptionLists)
+    {
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+                 errmsg("parquet_s3_fdw: unsupported feature WITH CHECK OPTION")));
+    }
+
+    /*
+     * Raise error if there is RETURNING
+     */
+    if (plan->returningLists)
+    {
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+                 errmsg("parquet_s3_fdw: unsupported feature RETURNING")));
+    }
+
+    /*
+     * Raise error if there is ON CONFLICT
+     */
+    if (plan->onConflictAction != ONCONFLICT_NONE)
+    {
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+                 errmsg("parquet_s3_fdw: unsupported feature ON CONFLICT")));
+    }
+
+    /*
+     * Add all primary key attribute names to keyAttrs
+     */
+    for (int i = 0; i < tupdesc->natts; ++i)
+    {
+        Form_pg_attribute att = TupleDescAttr(tupdesc, i);
+        AttrNumber    attrno = att->attnum;
+        List       *options;
+        ListCell   *option;
+
+        /* look for the "key" option on this column */
+        options = GetForeignColumnOptions(foreignTableId, attrno);
+        foreach(option, options)
+        {
+            DefElem    *def = (DefElem *) lfirst(option);
+
+            if (IS_KEY_COLUMN(def))
+            {
+                keyAttrs = lappend(keyAttrs, makeString(att->attname.data));
+            }
+        }
+    }
+
+    table_close(rel, NoLock);
+    return list_make2(targetAttrs, keyAttrs);
+}
+
+/*
+ * parquetBeginForeignModify
+ *      Begin an insert/update/delete operation on a foreign table
+ */
+extern "C" void
+parquetBeginForeignModify(ModifyTableState *mtstate,
+                          ResultRelInfo *resultRelInfo,
+                          List *fdw_private,
+                          int subplan_index,
+                          int eflags)
+{
+    ParquetS3FdwModifyState *fmstate = NULL;
+    EState	               *estate = mtstate->ps.state;
+    Relation                rel = resultRelInfo->ri_RelationDesc;
+    Oid                     foreignTableId = InvalidOid;
+    std::string             error;
+    arrow::Status           status;
+    Plan                   *subplan;
+    ParquetFdwPlanState    *plstate;
+    int                     i = 0;
+    ListCell               *lc;
+    MemoryContext           temp_cxt;
+    TupleDesc               tupleDesc;
+    std::set<std::string>   sorted_cols;
+    std::set<std::string>   key_attrs;
+    std::set<int>           target_attrs;
+    MemoryContextCallback  *callback;
+
+#if (PG_VERSION_NUM >= 140000)
+    subplan = outerPlanState(mtstate)->plan;
+#else
+    subplan = mtstate->mt_plans[subplan_index]->plan;
+#endif
+
+    temp_cxt = AllocSetContextCreate(estate->es_query_cxt,
+                                     "parquet_s3_fdw temporary data",
+                                     ALLOCSET_DEFAULT_SIZES);
+    foreignTableId = RelationGetRelid(rel);
+
+    /* get table option */
+    plstate = (ParquetFdwPlanState *) palloc0(sizeof(ParquetFdwPlanState));
+    get_table_options(foreignTableId, plstate);
+
+    /*
+     * Do nothing in EXPLAIN (no ANALYZE) case.  resultRelInfo->ri_FdwState
+     * stays NULL.
+     */
+    if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
+        return;
+
+    /* Get S3 connection */
+    if (IS_S3_PATH(plstate->dirname) || parquetIsS3Filenames(plstate->filenames))
+        plstate->s3client = parquetGetConnectionByTableid(foreignTableId);
+    else
+        plstate->s3client = NULL;
+
+    if (!plstate->filenames)
+    {
+        if (IS_S3_PATH(plstate->dirname))
+            plstate->filenames = parquetGetS3ObjectList(plstate->s3client, plstate->dirname);
+        else
+            plstate->filenames = parquetGetDirFileList(plstate->filenames, plstate->dirname);
+    }
+
+    tupleDesc = RelationGetDescr(rel);
+
+    foreach(lc, (List *) list_nth(fdw_private, 0))
+        target_attrs.insert(lfirst_int(lc));
+
+    AttrNumber *junk_idx = (AttrNumber *)palloc0(RelationGetDescr(rel)->natts * sizeof(AttrNumber));
+
+    if (plstate->schemaless == true)
+    {
+        foreach(lc, plstate->key_columns)
+        {
+            char *key_column_name = (char *) lfirst(lc);
+
+            key_attrs.insert(std::string(key_column_name));
+        }
+    }
+    else
+    {
+        List        *key_attrs_name_list = (List *) list_nth(fdw_private, 1);
+
+        foreach(lc, key_attrs_name_list)
+        {
+            char *key_column_name = strVal((Node *) lfirst(lc));
+
+            key_attrs.insert(std::string(key_column_name));
+        }
+    }
+
+    if (mtstate->operation != CMD_INSERT)
+    {
+        if (key_attrs.size() == 0)
+            elog(ERROR, "parquet_s3_fdw: no primary key column specified for foreign table");
+    }
+
+    /* loop through table columns */
+    for (i = 0; i < RelationGetDescr(rel)->natts; ++i)
+    {
+        /*
+         * for primary key columns, get the resjunk attribute number and store it
+         */
+        junk_idx[i] = ExecFindJunkAttributeInTlist(subplan->targetlist,
+                                         get_attname(foreignTableId, i + 1, false));
+    }
+
+    /*
+     *  Get sorted column list.
+     */
+    foreach (lc, plstate->attrs_sorted)
+    {
+        char   *attname = (char *)lfirst(lc);
+
+        sorted_cols.insert(std::string(attname));
+    }
+
+    try
+    {
+        fmstate = create_parquet_modify_state(temp_cxt, plstate->dirname, plstate->s3client, tupleDesc,
+                                                 target_attrs, key_attrs, junk_idx, plstate->use_threads,
+                                                 plstate->use_threads, plstate->schemaless, sorted_cols);
+
+        fmstate->set_rel_name(RelationGetRelationName(rel));
+        foreach(lc, plstate->filenames)
+        {
+            char *filename = strVal((Node *) lfirst(lc));
+
+            fmstate->add_file(filename);
+        }
+
+        if (plstate->selector_function_name)
+            fmstate->set_user_defined_func(plstate->selector_function_name);
+    }
+    catch(std::exception &e)
+    {
+        error = e.what();
+    }
+    if (!error.empty())
+        elog(ERROR, "parquet_s3_fdw: %s", error.c_str());
+
+    /*
+     * Enable automatic execution state destruction by using memory context
+     * callback
+     */
+    callback = (MemoryContextCallback *) palloc(sizeof(MemoryContextCallback));
+    callback->func = destroy_parquet_modify_state;
+    callback->arg = (void *) fmstate;
+    MemoryContextRegisterResetCallback(estate->es_query_cxt, callback);
+
+    resultRelInfo->ri_FdwState = fmstate;
+}
+
+/*
+ * parquetExecForeignInsert
+ *      Insert one row into a foreign table
+ */
+extern "C" TupleTableSlot *
+parquetExecForeignInsert(EState *estate,
+                         ResultRelInfo *resultRelInfo,
+                         TupleTableSlot *slot,
+                         TupleTableSlot *planSlot)
+{
+    ParquetS3FdwModifyState *fmstate = (ParquetS3FdwModifyState *) resultRelInfo->ri_FdwState;
+
+    fmstate->exec_insert(slot);
+
+    return slot;
+}
+
+/*
+ * parquetExecForeignUpdate
+ *      Update one row in a foreign table
+ */
+extern "C" TupleTableSlot *
+parquetExecForeignUpdate(EState *estate,
+                          ResultRelInfo *resultRelInfo,
+                          TupleTableSlot *slot,
+                          TupleTableSlot *planSlot)
+{
+    ParquetS3FdwModifyState *fmstate = (ParquetS3FdwModifyState *) resultRelInfo->ri_FdwState;
+
+    fmstate->exec_update(slot, planSlot);
+
+    return slot;
+}
+
+/*
+ * postgresExecForeignDelete
+ *      Delete one row from a foreign table
+ */
+extern "C" TupleTableSlot *
+parquetExecForeignDelete(EState *estate,
+                         ResultRelInfo *resultRelInfo,
+                         TupleTableSlot *slot,
+                         TupleTableSlot *planSlot)
+{
+    ParquetS3FdwModifyState *fmstate = (ParquetS3FdwModifyState *) resultRelInfo->ri_FdwState;
+
+    fmstate->exec_delete(slot, planSlot);
+
+    return slot;
+}
+
+/*
+ * postgresEndForeignModify
+ *      Finish an insert/update/delete operation on a foreign table
+ */
+extern "C" void
+parquetEndForeignModify(EState *estate,
+                        ResultRelInfo *resultRelInfo)
+{
+    ParquetS3FdwModifyState   *fmstate = (ParquetS3FdwModifyState *) resultRelInfo->ri_FdwState;
+
+    if (fmstate != NULL)
+        fmstate->upload();
+}
+
+/*
+ * parquet_slot_to_record_datum: Convert TupleTableSlot to record type
+ */
+Datum
+parquet_slot_to_record_datum(TupleTableSlot *slot)
+{
+    HeapTuple tuple = heap_form_tuple(slot->tts_tupleDescriptor, slot->tts_values, slot->tts_isnull);
+
+    return HeapTupleHeaderGetDatum(tuple->t_data);
+}
+
+/*
+ * get_selected_file_from_userfunc
+ *      return file name get from user defined funcion in insert_file_selector option.
+ */
+char *
+get_selected_file_from_userfunc(char *func_signature, TupleTableSlot *slot, const char *dirname)
+{
+    Oid         funcid;
+    List       *f;
+    Datum       target_file;
+    Oid        *funcargtypes;
+    std::string funcname;
+    std::vector<std::string> param_names;
+    int         nargs;
+    Datum      *args;
+    bool       *is_nulls;
+
+    parse_function_signature(func_signature, funcname, param_names);
+
+    f = stringToQualifiedNameList(funcname.c_str());
+
+    nargs = param_names.size();
+    funcargtypes = (Oid *) palloc0(sizeof(Oid) * nargs);
+    args = (Datum *) palloc0(sizeof(Datum) * nargs);
+    is_nulls = (bool *) palloc0(sizeof(bool) * nargs);
+
+    for (int i = 0; i < nargs; i++)
+    {
+        if (param_names[i] == "dirname")
+        {
+            if (dirname)
+            {
+                Datum dirname_datum = (Datum) palloc0(strlen(dirname ) + VARHDRSZ);
+                memcpy(VARDATA(dirname_datum), dirname, strlen(dirname));
+                SET_VARSIZE(dirname_datum, strlen(dirname) + VARHDRSZ);
+
+                funcargtypes[i] = TEXTOID;
+                args[i] = dirname_datum;
+                is_nulls[i] = false;
+            }
+            else
+            {
+                is_nulls[i] = true;
+            }
+        }
+        else if (!get_column_by_name(param_names[i].c_str(), slot, &funcargtypes[i], &args[i], &is_nulls[i]))
+        {
+            elog(ERROR, "parquet_s3_fdw: arguments of insert_file_selector must be dirname or column name.");
+        }
+    }
+
+    funcid = LookupFuncName(f, nargs, funcargtypes, false);
+    target_file = OidFunctionCallnNullableArg(funcid, args, is_nulls, nargs);
+    return TextDatumGetCString(target_file);
+}
+
+/*
+ * get_column_by_name
+ *      get type, value, isnull from given slot base on attname
+ *      return false if column does not exist.
+ */
+static bool
+get_column_by_name(const char *name, TupleTableSlot *slot, Oid *type, Datum *value, bool *isnull)
+{
+    TupleDesc desc = slot->tts_tupleDescriptor;
+
+    for (int i = 0; i < desc->natts; i++)
+    {
+        Form_pg_attribute att = TupleDescAttr(desc, i);
+
+        if (strcmp(att->attname.data, name) == 0)
+        {
+            *value = slot_getattr(slot, att->attnum, isnull);
+            *type = att->atttypid;
+            return true;
+        }
+    }
+    return false;
+}
+
+inline std::string trim(std::string str)
+{
+    str.erase(str.find_last_not_of(' ') + 1);   /* suffixing spaces */
+    str.erase(0, str.find_first_not_of(' '));   /* prefixing spaces */
+    return str;
+}
+
+/*
+ * parse function signature: funcname(arg1_name, arg2_name)
+ */
+static void
+parse_function_signature(char *signature, std::string &funcname, std::vector<std::string> &param_names)
+{
+    std::string s = std::string(signature);
+    size_t pos = 0;
+
+    /* find function name */
+    pos = s.find("(");
+    if (pos == std::string::npos)
+        elog(ERROR, "parquet_s3_fdw: Malformed function signature: %s", signature);
+
+    funcname = s.substr(0, pos);
+    s.erase(0, pos + 1); /* erase '(' also */
+
+    /* find function args */
+    pos = s.find(")");
+    if (pos == std::string::npos)
+        elog(ERROR, "parquet_s3_fdw: Malformed function signature: %s", signature);
+
+    std::string arg_list = s.substr(0, pos);
+    do
+    {
+        pos = arg_list.find(",");
+        std::string arg = trim(arg_list.substr(0, pos));
+        param_names.push_back(arg);
+        arg_list.erase(0, pos + 1);
+    }
+    while (pos != std::string::npos);
 }

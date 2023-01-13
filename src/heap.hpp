@@ -16,7 +16,7 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <functional> 
+#include <functional>
 
 
 template<class T>

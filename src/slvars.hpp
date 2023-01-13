@@ -1,3 +1,14 @@
+/*-------------------------------------------------------------------------
+ *
+ * parquet_s3 Foreign Data Wrapper for PostgreSQL
+ *
+ * Portions Copyright (c) 2022, TOSHIBA CORPORATION
+ *
+ * IDENTIFICATION
+ *        contrib/parquet_s3_fdw/src/slvars.hpp
+ *
+ *-------------------------------------------------------------------------
+ */
 
 #ifndef SLVARS_HPP
 #define SLVARS_HPP

@@ -1,0 +1,202 @@
+\ir sql/parameters_server.conf
+\set USE_MINIO        'OPTIONS (use_minio \'true\', endpoint \'127.0.0.1:9000\')'
+\set USER_PASSWORD    'OPTIONS (user \'minioadmin\', password \'minioadmin\')'
+\set PATH_FILENAME    's3:\/'
+\set PLACE            'SERVERS'
+--Testcase 1:
+CREATE EXTENSION parquet_s3_fdw;
+--Testcase 2:
+CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw :USE_MINIO;
+--Testcase 3:
+CREATE USER MAPPING FOR PUBLIC SERVER parquet_s3_srv :USER_PASSWORD;
+-- **********************************************
+-- Foreign table using 'filename' option
+-- **********************************************
+-- File under bucket
+--Testcase 4:
+CREATE FOREIGN TABLE file0 (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (filename 's3://test-bucket/file0.parquet');
+--Testcase 5:
+SELECT * FROM file0;
+        timestamp         | col1  | col2 | col3 
+--------------------------+-------+------+------
+ Fri Aug 14 11:11:11 2020 | file0 |    1 |  0.1
+ Fri Aug 14 12:12:12 2020 | file0 |    2 |  0.2
+(2 rows)
+
+-- File in directory
+--Testcase 6:
+CREATE FOREIGN TABLE file1 (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (filename 's3://test-bucket/dir1/file1.parquet');
+--Testcase 7:
+SELECT * FROM file1;
+        timestamp         | col1  | col2 | col3 
+--------------------------+-------+------+------
+ Sat Aug 15 13:13:13 2020 | file1 |    1 |  0.1
+ Sat Aug 15 14:14:14 2020 | file1 |    2 |  0.2
+ Sat Aug 15 15:15:15 2020 | file1 |    3 |  0.3
+(3 rows)
+
+-- File in sub directory
+--Testcase 8:
+CREATE FOREIGN TABLE file111 (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (filename 's3://test-bucket/dir1/dir11/file111.parquet');
+--Testcase 9:
+SELECT * FROM file111;
+        timestamp         |  col1   | col2 | col3 
+--------------------------+---------+------+------
+ Sun Aug 16 16:16:16 2020 | file111 |    1 |  0.1
+(1 row)
+
+-- Multiple files in the same directory
+--Testcase 10:
+CREATE FOREIGN TABLE file212223 (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (filename 's3://test-bucket/dir2/file21.parquet s3://test-bucket/dir2/file22.parquet s3://test-bucket/dir2/file23.parquet');
+--Testcase 11:
+SELECT * FROM file212223;
+        timestamp         |  col1  | col2 | col3 
+--------------------------+--------+------+------
+ Sat Aug 01 00:00:01 2020 | file21 |    2 |  0.2
+ Sat Aug 01 00:00:02 2020 | file21 |    1 |  0.1
+ Sun Aug 02 00:00:01 2020 | file22 |    1 |  0.1
+ Mon Aug 03 00:00:02 2020 | file22 |    2 |  0.2
+ Sun Aug 02 00:00:03 2020 | file22 |    3 |  0.3
+ Mon Aug 03 00:00:04 2020 | file22 |    4 |  0.4
+ Mon Aug 03 00:00:01 2020 | file22 |    1 |  0.1
+ Sat Aug 01 00:00:02 2020 | file23 |    2 |  0.2
+(8 rows)
+
+-- Multiple files in some directories
+--Testcase 12:
+CREATE FOREIGN TABLE file0121 (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (filename 's3://test-bucket/file0.parquet s3://test-bucket/dir1/dir12/file121.parquet');
+--Testcase 13:
+SELECT * FROM file0121;
+        timestamp         |  col1   | col2 | col3 
+--------------------------+---------+------+------
+ Fri Aug 14 11:11:11 2020 | file0   |    1 |  0.1
+ Fri Aug 14 12:12:12 2020 | file0   |    2 |  0.2
+ Mon Aug 10 20:20:20 2020 | file112 |    3 |  0.3
+ Thu Aug 20 20:20:20 2020 | file112 |    2 |  0.2
+ Sun Aug 30 20:20:20 2020 | file112 |    1 |  0.1
+(5 rows)
+
+-- **********************************************
+-- Foreign table using 'dirname' option
+-- **********************************************
+-- Only bucket name
+--Testcase 14:
+CREATE FOREIGN TABLE bucket (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (dirname 's3://test-bucket');
+--Testcase 15:
+SELECT * FROM bucket;
+        timestamp         |  col1   | col2 | col3 
+--------------------------+---------+------+------
+ Sun Aug 16 16:16:16 2020 | file111 |    1 |  0.1
+ Mon Aug 17 19:19:19 2020 | file112 |    3 |  0.3
+ Mon Aug 17 18:18:18 2020 | file112 |    2 |  0.2
+ Mon Aug 17 17:17:17 2020 | file112 |    1 |  0.1
+ Mon Aug 10 20:20:20 2020 | file112 |    3 |  0.3
+ Thu Aug 20 20:20:20 2020 | file112 |    2 |  0.2
+ Sun Aug 30 20:20:20 2020 | file112 |    1 |  0.1
+ Sat Aug 15 13:13:13 2020 | file1   |    1 |  0.1
+ Sat Aug 15 14:14:14 2020 | file1   |    2 |  0.2
+ Sat Aug 15 15:15:15 2020 | file1   |    3 |  0.3
+ Sat Aug 01 00:00:01 2020 | file21  |    2 |  0.2
+ Sat Aug 01 00:00:02 2020 | file21  |    1 |  0.1
+ Sun Aug 02 00:00:01 2020 | file22  |    1 |  0.1
+ Mon Aug 03 00:00:02 2020 | file22  |    2 |  0.2
+ Sun Aug 02 00:00:03 2020 | file22  |    3 |  0.3
+ Mon Aug 03 00:00:04 2020 | file22  |    4 |  0.4
+ Mon Aug 03 00:00:01 2020 | file22  |    1 |  0.1
+ Sat Aug 01 00:00:02 2020 | file23  |    2 |  0.2
+ Fri Aug 14 11:11:11 2020 | file0   |    1 |  0.1
+ Fri Aug 14 12:12:12 2020 | file0   |    2 |  0.2
+(20 rows)
+
+-- Directory
+--Testcase 16:
+CREATE FOREIGN TABLE dir1 (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (dirname 's3://test-bucket/dir1');
+--Testcase 17:
+SELECT * FROM dir1;
+        timestamp         |  col1   | col2 | col3 
+--------------------------+---------+------+------
+ Sun Aug 16 16:16:16 2020 | file111 |    1 |  0.1
+ Mon Aug 17 19:19:19 2020 | file112 |    3 |  0.3
+ Mon Aug 17 18:18:18 2020 | file112 |    2 |  0.2
+ Mon Aug 17 17:17:17 2020 | file112 |    1 |  0.1
+ Mon Aug 10 20:20:20 2020 | file112 |    3 |  0.3
+ Thu Aug 20 20:20:20 2020 | file112 |    2 |  0.2
+ Sun Aug 30 20:20:20 2020 | file112 |    1 |  0.1
+ Sat Aug 15 13:13:13 2020 | file1   |    1 |  0.1
+ Sat Aug 15 14:14:14 2020 | file1   |    2 |  0.2
+ Sat Aug 15 15:15:15 2020 | file1   |    3 |  0.3
+(10 rows)
+
+-- Sub directory
+--Testcase 18:
+CREATE FOREIGN TABLE dir11 (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (dirname 's3://test-bucket/dir1/dir11');
+--Testcase 19:
+SELECT * FROM dir11;
+        timestamp         |  col1   | col2 | col3 
+--------------------------+---------+------+------
+ Sun Aug 16 16:16:16 2020 | file111 |    1 |  0.1
+ Mon Aug 17 19:19:19 2020 | file112 |    3 |  0.3
+ Mon Aug 17 18:18:18 2020 | file112 |    2 |  0.2
+ Mon Aug 17 17:17:17 2020 | file112 |    1 |  0.1
+(4 rows)
+
+-- **********************************************
+-- Error cases
+-- **********************************************
+-- File does not exist
+--Testcase 20:
+CREATE FOREIGN TABLE dummyfile (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (filename 's3://test-bucket/dummy-file.parquet');
+--Testcase 21:
+SELECT * FROM dummyfile;
+ERROR:  parquet_s3_fdw: failed to exctract row groups from Parquet file: failed to open Parquet file HeadObject failed
+-- Bucket does not exist
+--Testcase 22:
+CREATE FOREIGN TABLE dummybucket (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (dirname 's3://dummy-bucket');
+--Testcase 23:
+SELECT * FROM dummybucket;
+ERROR:  parquet_s3_fdw: failed to get object list on dummy-bucket. The specified bucket does not exist
+-- Directory does not exist
+--Testcase 24:
+CREATE FOREIGN TABLE dummydir (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (dirname 's3://test-bucket/dummy-dir');
+--Testcase 25:
+SELECT * FROM dummydir;
+ERROR:  parquet_s3_fdw: object not found on s3://test-bucket/dummy-dir
+-- Use both options 'filename' and 'dirname'
+--Testcase 26:
+CREATE FOREIGN TABLE dummy1 (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (filename 's3://test-bucket/dir1/file1.parquet', dirname 's3://test-bucket/dir1');
+ERROR:  parquet_s3_fdw: either filename or dirname can be specified
+-- Specify both local file and S3 file
+--Testcase 27:
+CREATE FOREIGN TABLE dummy2 (timestamp timestamp, col1 text, col2 bigint, col3 double precision) SERVER parquet_s3_srv OPTIONS (filename 's3://test-bucket/dir1/file1.parquet /tmp/file2.parquet');
+ERROR:  parquet_s3_fdw: Cannot specify the mix of local file and S3 file
+-- **********************************************
+-- Cleanup
+-- **********************************************
+--Testcase 28:
+DROP FOREIGN TABLE file0;
+--Testcase 29:
+DROP FOREIGN TABLE file1;
+--Testcase 30:
+DROP FOREIGN TABLE file111;
+--Testcase 31:
+DROP FOREIGN TABLE file212223;
+--Testcase 32:
+DROP FOREIGN TABLE file0121;
+--Testcase 33:
+DROP FOREIGN TABLE bucket;
+--Testcase 34:
+DROP FOREIGN TABLE dir1;
+--Testcase 35:
+DROP FOREIGN TABLE dir11;
+--Testcase 36:
+DROP FOREIGN TABLE dummyfile;
+--Testcase 37:
+DROP FOREIGN TABLE dummybucket;
+--Testcase 38:
+DROP FOREIGN TABLE dummydir;
+--Testcase 39:
+DROP USER MAPPING FOR PUBLIC SERVER parquet_s3_srv;
+--Testcase 40:
+DROP SERVER parquet_s3_srv;
+--Testcase 41:
+DROP EXTENSION parquet_s3_fdw;

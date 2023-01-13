@@ -29,6 +29,7 @@ extern "C"
 {
 #include "postgres.h"
 #include "access/sysattr.h"
+#include "catalog/pg_collation_d.h"
 #include "parser/parse_coerce.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -199,11 +200,11 @@ void ParquetReader::schemaless_create_column_mapping(parquet::arrow::SchemaManif
     {
         auto field_name = schema_field.field->name();
         auto arrow_type = schema_field.field->type();
-        char arrow_colname[255];
+        char arrow_colname[NAMEDATALEN];
         size_t sorted_col_idx;
         bool is_target_col;
 
-        if (field_name.length() > NAMEDATALEN)
+        if (field_name.length() > NAMEDATALEN - 1)
             throw Error("parquet column name '%s' is too long (max: %d)",
                         field_name.c_str(), NAMEDATALEN - 1);
         tolowercase(field_name.c_str(), arrow_colname);
@@ -338,7 +339,7 @@ void ParquetReader::schemaless_create_column_mapping(parquet::arrow::SchemaManif
                 memset(&sort_key, 0, sizeof(SortSupportData));
                 /* Init sortkey data */
                 sort_key.ssup_cxt = allocator->context();
-                sort_key.ssup_collation = InvalidOid;
+                sort_key.ssup_collation = DEFAULT_COLLATION_OID;
                 sort_key.ssup_nulls_first = true;
                 sort_key.ssup_attno = sorted_col_idx;
                 sort_key.abbreviate = false;
@@ -373,6 +374,7 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
     std::shared_ptr<arrow::Schema>  a_schema;
     parquet::arrow::SchemaManifest  manifest;
     auto    p_schema = this->reader->parquet_reader()->metadata()->schema();
+    bool have_wholerow = (attrs_used.find(0 - FirstLowInvalidHeapAttributeNumber) != attrs_used.end());
 
     if (!parquet::arrow::SchemaManifest::Make(p_schema, nullptr, props, &manifest).ok())
         throw std::runtime_error("parquet_s3_fdw: error creating arrow schema");
@@ -388,13 +390,13 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
     for (int i = 0; i < tupleDesc->natts; i++)
     {
         AttrNumber  attnum = i + 1 - FirstLowInvalidHeapAttributeNumber;
-        char        pg_colname[255];
+        char        pg_colname[NAMEDATALEN];
         const char *attname = NameStr(TupleDescAttr(tupleDesc, i)->attname);
 
         this->map[i] = -1;
 
         /* Skip columns we don't intend to use in query */
-        if (attrs_used.find(attnum) == attrs_used.end())
+        if (!have_wholerow && attrs_used.find(attnum) == attrs_used.end())
             continue;
 
         tolowercase(NameStr(TupleDescAttr(tupleDesc, i)->attname), pg_colname);
@@ -403,9 +405,9 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
         {
             auto field_name = schema_field.field->name();
             auto arrow_type = schema_field.field->type();
-            char arrow_colname[255];
+            char arrow_colname[NAMEDATALEN];
 
-            if (field_name.length() > NAMEDATALEN)
+            if (field_name.length() > NAMEDATALEN - 1)
                 throw Error("parquet column name '%s' is too long (max: %d)",
                             field_name.c_str(), NAMEDATALEN - 1);
             tolowercase(schema_field.field->name().c_str(), arrow_colname);
@@ -1474,8 +1476,18 @@ public:
                     {
                         arrow::MapArray* maparray = (arrow::MapArray*) array;
 
-                        slot->tts_values[attr] =
-                            this->map_to_datum(maparray, chunkInfo.pos, typinfo);
+                        Datum jsonb = this->map_to_datum(maparray, chunkInfo.pos, typinfo);
+
+                        /*
+                         * Copy jsonb into memory block allocated by
+                         * FastAllocator to prevent its destruction though
+                         * to be able to recycle it once it fulfilled its
+                         * purpose.
+                         */
+                        void *res = allocator->fast_alloc(VARSIZE_ANY(jsonb));
+                        memcpy(res, (Jsonb *) jsonb, VARSIZE_ANY(jsonb));
+                        slot->tts_values[attr] = (Datum) res;
+                        pfree((Jsonb *) jsonb);
                         break;
                     }
                     default:
