@@ -27,7 +27,7 @@ extern "C"
  */
 typedef struct pull_slvars_context
 {
-	Index				varno;
+	int					varno;
 	schemaless_info	   *pslinfo;
 	List			   *columns;
 	bool				extract_raw;

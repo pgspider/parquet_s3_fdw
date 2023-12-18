@@ -12,8 +12,10 @@ mkdir -p /tmp/data_s3_schemaless || true
 mkdir -p data/test-modify/parquet_modify_7
 cp -a data /tmp/data_local
 cp -a data/ported_postgres /tmp/data_local
+cp -a data/ddlcommand /tmp/data_local
 cp -a data /tmp/data_s3
 cp -a data/ported_postgres /tmp/data_s3
+cp -a data/ddlcommand /tmp/data_s3
 cp -a data/test-bucket /tmp/data_s3
 
 # Init data for schemaless mode

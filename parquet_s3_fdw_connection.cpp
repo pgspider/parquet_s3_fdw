@@ -17,6 +17,9 @@
 #include <aws/s3/model/ListObjectsRequest.h>
 #include <aws/s3/model/GetObjectRequest.h>
 #include <aws/s3/model/PutObjectRequest.h>
+#include <aws/s3/model/DeleteObjectRequest.h>
+#include <aws/s3/model/HeadObjectRequest.h>
+#include <aws/s3/model/HeadBucketRequest.h>
 #include <fstream>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -515,7 +518,8 @@ s3_client_open(const char *user, const char *password, bool use_minio, const cha
 		const Aws::String defaultRegion = "ap-northeast-1";
 		clientConfig.scheme = Aws::Http::Scheme::HTTPS;
 		clientConfig.region = awsRegion ? (Aws::String) awsRegion : defaultRegion;
-		s3_client = new Aws::S3::S3Client(cred, clientConfig);
+		s3_client = new Aws::S3::S3Client(cred, clientConfig,
+				Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never, false);
 	}
 	return s3_client;
 }
@@ -533,17 +537,20 @@ s3_client_close(Aws::S3::S3Client *s3_client)
  * Get S3 handle by foreign table id from connection cache.
  */
 Aws::S3::S3Client*
-parquetGetConnectionByTableid(Oid foreigntableid)
+parquetGetConnectionByTableid(Oid foreigntableid, Oid userid)
 {
     Aws::S3::S3Client *s3client = NULL;
+	UserMapping		  *user;
 
     if (foreigntableid != 0)
     {
         ForeignTable  *ftable = GetForeignTable(foreigntableid);
         ForeignServer *fserver = GetForeignServer(ftable->serverid);
-        UserMapping   *user = GetUserMapping(GetUserId(), fserver->serverid);
-        parquet_s3_server_opt *options = parquet_s3_get_options(foreigntableid);
+        parquet_s3_server_opt *options;
 
+        Assert(userid != InvalidOid);
+        user = GetUserMapping(userid, fserver->serverid);
+        options = parquet_s3_get_options(foreigntableid);
         s3client = parquetGetConnection(user, options->use_minio);
     }
     return s3client;
@@ -577,7 +584,7 @@ parquetGetS3ObjectList(Aws::S3::S3Client *s3_cli, const char *s3path)
         len = bucketName.length();
     }
     request.WithBucket(bucketName.substr(0, len));
-    
+
 	auto outcome = s3_client.ListObjects(request);
 
 	if (!outcome.IsSuccess())
@@ -626,28 +633,34 @@ parquet_disconnect_s3_server()
 	HASH_SEQ_STATUS scan_reader;
 	ReaderCacheEntry *entry_reader;
 
-	hash_seq_init(&scan, ConnectionHash);
-	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	if (ConnectionHash)
 	{
-		/* Ignore cache entry if no open connection right now */
-		if (entry->conn == NULL)
-			continue;
+		hash_seq_init(&scan, ConnectionHash);
+		while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+		{
+			/* Ignore cache entry if no open connection right now */
+			if (entry->conn == NULL)
+				continue;
 
-		elog(DEBUG3, "parquet_s3_fdw: discarding connection %p", entry->conn);
-		close_s3_connection(entry);
+			elog(DEBUG3, "parquet_s3_fdw: discarding connection %p", entry->conn);
+			close_s3_connection(entry);
+		}
 	}
 
-	hash_seq_init(&scan_reader, FileReaderHash);
-	while ((entry_reader = (ReaderCacheEntry *) hash_seq_search(&scan_reader)))
+	if (FileReaderHash)
 	{
-		/* Ignore cache entry if no open connection right now */
-		if (entry_reader->file_reader == NULL)
-			continue;
+		hash_seq_init(&scan_reader, FileReaderHash);
+		while ((entry_reader = (ReaderCacheEntry *) hash_seq_search(&scan_reader)))
+		{
+			/* Ignore cache entry if no open connection right now */
+			if (entry_reader->file_reader == NULL)
+				continue;
 
-		elog(DEBUG3, "parquet_s3_fdw: discarding reader connection %p", entry_reader->file_reader);
-		entry_reader->file_reader->reader.release();
-		delete(entry_reader->file_reader);
-		entry_reader->file_reader = NULL;
+			elog(DEBUG3, "parquet_s3_fdw: discarding reader connection %p", entry_reader->file_reader);
+			entry_reader->file_reader->reader.release();
+			delete(entry_reader->file_reader);
+			entry_reader->file_reader = NULL;
+		}
 	}
 }
 
@@ -1130,36 +1143,87 @@ parquet_s3_fdw_disconnect_all(PG_FUNCTION_ARGS)
 bool
 parquet_upload_file_to_s3(const char *dirname, Aws::S3::S3Client *s3_client, const char *filename, const char *local_file)
 {
-    char           *bucket;
-    char           *filepath;
-    Aws::S3::Model::PutObjectRequest request;
-    std::shared_ptr<Aws::IOStream> input_data;
-    Aws::S3::Model::PutObjectOutcome outcome;
+	char           *bucket;
+	char           *filepath;
+	Aws::S3::Model::PutObjectRequest request;
+	std::shared_ptr<Aws::IOStream> input_data;
+	Aws::S3::Model::PutObjectOutcome outcome;
 
-    parquetSplitS3Path(dirname, filename, &bucket, &filepath);
-    request.SetBucket(bucket);
+	parquetSplitS3Path(dirname, filename, &bucket, &filepath);
+	request.SetBucket(bucket);
 
-    /*
-     * We are using the name of the file as the key for the object in the bucket.
-     */
-    request.SetKey(filepath);
+	/*
+	 * We are using the name of the file as the key for the object in the bucket.
+	 */
+	request.SetKey(filepath);
 
-    /* load local file to update */
-    input_data = Aws::MakeShared<Aws::FStream>("PutObjectInputStream",
-                 local_file,
-                 std::ios_base::in | std::ios_base::binary);
+	/* load local file to update */
+	input_data = Aws::MakeShared<Aws::FStream>("PutObjectInputStream",
+	             local_file,
+	             std::ios_base::in | std::ios_base::binary);
 
-    request.SetBody(input_data);
-    outcome = s3_client->PutObject(request);
+	request.SetBody(input_data);
+	outcome = s3_client->PutObject(request);
 
-    if (outcome.IsSuccess())
-    {
-        elog(DEBUG1, "parquet_s3_fdw: added object '%s' to bucket '%s'.", filepath, bucket);
-        return true;
-    }
-    else
-    {
-        elog(ERROR, "parquet_s3_fdw: PutObject: %s", outcome.GetError().GetMessage().c_str());
-        return false;
-    }
+	if (outcome.IsSuccess())
+	{
+	    elog(DEBUG1, "parquet_s3_fdw: added object '%s' to bucket '%s'.", filepath, bucket);
+	    return true;
+	}
+	else
+	{
+	    elog(ERROR, "parquet_s3_fdw: PutObject: %s", outcome.GetError().GetMessage().c_str());
+	    return false;
+	}
+}
+
+/*
+ * Delete an object on S3 storage by given dirname and file name.
+ */
+bool
+parquet_delete_object(const char *dirname, const char *filename, const Aws::S3::S3Client *s3_client)
+{
+	Aws::S3::Model::DeleteObjectRequest  request;
+	Aws::S3::Model::DeleteObjectOutcome  outcome;
+
+	request.WithKey(filename).WithBucket(dirname);
+	outcome = s3_client->DeleteObject(request);
+
+	if (outcome.IsSuccess())
+	{
+	    elog(DEBUG1, "parquet_s3_fdw: deleted object '%s' from bucket '%s'.", filename, dirname);
+	    return true;
+	}
+	else
+	{
+	    elog(ERROR, "parquet_s3_fdw: DeleteObject failed. %s", outcome.GetError().GetMessage().c_str());
+	    return false;
+	}
+}
+
+/*
+ * Check whether that object in S3 storage exists or not.
+ */
+bool
+parquet_is_object_exist(const char *dirname, const char *filename, const Aws::S3::S3Client *s3_client)
+{
+	Aws::S3::Model::HeadObjectRequest request;
+	Aws::S3::Model::HeadObjectOutcome  outcome;
+
+	request.WithKey(filename).WithBucket(dirname);
+	outcome = s3_client->HeadObject(request);
+
+	if (outcome.IsSuccess())
+	{
+	    elog(DEBUG1, "parquet_s3_fdw: object '%s' from bucket '%s' is existed.", filename, dirname);
+	    return true;
+	}
+	else
+	{
+	    if (outcome.GetError().GetErrorType() != Aws::S3::S3Errors::RESOURCE_NOT_FOUND)
+	        elog(ERROR, "parquet_s3_fdw: failed to get head object on '%s'. %s", dirname, outcome.GetError().GetMessage().c_str());
+
+	    /* 'filename' key does not exist on 'bucket' bucket */
+	    return false;
+	}
 }

@@ -377,7 +377,7 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
     bool have_wholerow = (attrs_used.find(0 - FirstLowInvalidHeapAttributeNumber) != attrs_used.end());
 
     if (!parquet::arrow::SchemaManifest::Make(p_schema, nullptr, props, &manifest).ok())
-        throw std::runtime_error("parquet_s3_fdw: error creating arrow schema");
+        throw Error("parquet_s3_fdw: error creating arrow schema ('%s')", this->filename.c_str());
 
     /* get the column mapping for schemaless mode */
     if (this->schemaless)
@@ -407,9 +407,9 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
             auto arrow_type = schema_field.field->type();
             char arrow_colname[NAMEDATALEN];
 
-            if (field_name.length() > NAMEDATALEN - 1)
-                throw Error("parquet column name '%s' is too long (max: %d)",
-                            field_name.c_str(), NAMEDATALEN - 1);
+            if (field_name.length() > NAMEDATALEN)
+                throw Error("parquet column name '%s' is too long (max: %d, file: '%s')",
+                            field_name.c_str(), NAMEDATALEN - 1, this->filename.c_str());
             tolowercase(schema_field.field->name().c_str(), arrow_colname);
 
             /*
@@ -1169,8 +1169,8 @@ public:
                         parquet::ParquetFileReader::OpenFile(filename, use_mmap),
                         &reader);
         if (!status.ok())
-            throw Error("parquet_s3_fdw: failed to open Parquet file %s",
-                                 status.message().c_str());
+            throw Error("parquet_s3_fdw: failed to open Parquet file %s ('%s')",
+                        status.message().c_str(), filename.c_str());
         this->reader = std::move(reader);
 
         /* Enable parallel columns decoding/decompression if needed */
@@ -1221,8 +1221,8 @@ public:
             ->ReadTable(this->indices, &this->table);
 
         if (!status.ok())
-            throw Error("parquet_s3_fdw: failed to read rowgroup #%i: %s",
-                        rowgroup, status.message().c_str());
+            throw Error("parquet_s3_fdw: failed to read rowgroup #%i: %s ('%s')",
+                        rowgroup, status.message().c_str(), this->filename.c_str());
 
         if (!this->table)
             throw std::runtime_error("parquet_s3_fdw: got empty table");
@@ -1572,8 +1572,8 @@ public:
                         parquet::ParquetFileReader::OpenFile(filename, use_mmap),
                         &reader);
         if (!status.ok())
-            throw Error("parquet_s3_fdw: failed to open Parquet file %s",
-                                 status.message().c_str());
+            throw Error("parquet_s3_fdw: failed to open Parquet file %s ('%s')",
+                        status.message().c_str(), filename.c_str());
         this->reader = std::move(reader);
 
         /* Enable parallel columns decoding/decompression if needed */
@@ -1631,8 +1631,8 @@ public:
             ->RowGroup(rowgroup)
             ->ReadTable(this->indices, &table);
         if (!status.ok())
-            throw Error("parquet_s3_fdw: failed to read rowgroup #%i: %s",
-                        rowgroup, status.message().c_str());
+            throw Error("parquet_s3_fdw: failed to read rowgroup #%i: %s ('%s')",
+                        rowgroup, status.message().c_str(), this->filename.c_str());
 
         /* Release resources acquired in the previous iteration */
         allocator->recycle();

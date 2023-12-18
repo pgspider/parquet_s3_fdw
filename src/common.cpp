@@ -44,7 +44,7 @@ exc_palloc(std::size_t size)
     void	   *ret;
     MemoryContext context = CurrentMemoryContext;
 
-    AssertArg(MemoryContextIsValid(context));
+    Assert(MemoryContextIsValid(context));
 
     if (!AllocSizeIsValid(size))
         throw std::bad_alloc();
@@ -239,7 +239,7 @@ void datum_to_jsonb(Datum value, Oid typoid, bool isnull, FmgrInfo *outfunc,
                 jb.val.string.val = strval;
             }
             else {
-                Datum numeric;
+                Datum numeric = (Datum) 0;
 
                 switch (typoid)
                 {
@@ -617,7 +617,7 @@ make_path(const std::string& path)
 }
 
 /**
- * @brief remove recursively directoty if empty
+ * @brief remove recursively directory if empty
  *
  * @param path
  * @return int
@@ -673,4 +673,114 @@ remove_directory_if_empty(const char *path)
         ret = rmdir(path);
 
     return ret;
+}
+
+/**
+ * @brief remove recursively directory (files and subdirectories)
+ *
+ * @param path
+ * @return void
+ */
+void
+delete_folder_tree(const char *path)
+{
+    int         ret;
+    struct stat st;
+    DIR        *dp;
+    struct dirent *entry;
+    char       *dirname = pstrdup(path);
+    char       *back;
+
+    ret = stat(path, &st);
+    if (ret != 0)
+        elog(ERROR, "parquet_s3_fdw: cannot stat %s", path);
+
+    dp = opendir(path);
+    if (!dp)
+        elog(ERROR, "parquet_s3_fdw: cannot open %s", path);
+
+    /* remove redundant slash */
+    back = dirname + strlen(dirname);
+    while (*--back == '/')
+    {
+        *back = '\0';
+    }
+
+    entry = readdir(dp);
+    while (entry != NULL) {
+        char *newpath;
+        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0)
+        {
+            newpath = psprintf("%s/%s", dirname, entry->d_name);
+            if (is_dir_exist(newpath))
+                delete_folder_tree(newpath);
+            else
+                std::remove(newpath);
+            pfree(newpath);
+        }
+        entry = readdir(dp);
+    }
+    closedir(dp);
+    rmdir(path);
+}
+
+/*
+ * string_to_int
+ *      Convert string to integer.
+ *
+ *      This is modified copy of pg_atoi() function which was removed from Postgres 15.
+ */
+int32
+string_to_int32(const char *s)
+{
+	long		l;
+	char	   *badp;
+
+	/*
+	 * Some versions of strtol treat the empty string as an error, but some
+	 * seem not to.  Make an explicit test to be sure we catch it.
+	 */
+	if (s == NULL)
+		elog(ERROR, "NULL pointer");
+	if (*s == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("invalid input syntax for type %s: \"%s\"",
+						"integer", s)));
+
+	errno = 0;
+	l = strtol(s, &badp, 10);
+
+	/* We made no progress parsing the string, so bail out */
+	if (s == badp)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("invalid input syntax for type %s: \"%s\"",
+						"integer", s)));
+
+	if (errno == ERANGE
+#if defined(HAVE_LONG_INT_64)
+	/* won't get ERANGE on these with 64-bit longs... */
+		|| l < INT_MIN || l > INT_MAX
+#endif
+		)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("value \"%s\" is out of range for type %s", s,
+						"integer")));
+
+	/*
+	 * Skip any trailing whitespace; if anything but whitespace remains before
+	 * the terminating character, bail out
+	 */
+	while (*badp && *badp != '\0' && isspace((unsigned char) *badp))
+		badp++;
+
+	if (*badp && *badp != '\0')
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("invalid input syntax for type %s: \"%s\"",
+						"integer", s)));
+
+	return (int32) l;
 }

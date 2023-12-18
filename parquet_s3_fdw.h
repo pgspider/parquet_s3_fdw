@@ -43,7 +43,7 @@
 #define parquet_fdw_use_threads parquet_s3_fdw_use_threads
 
 #define SingleFileExecutionState SingleFileExecutionStateS3
-#define CODE_VERSION 10000
+#define CODE_VERSION 10100
 
 /* Structure to store option information. */
 typedef struct parquet_s3_server_opt
@@ -58,6 +58,15 @@ typedef struct parquet_s3_server_opt
 bool		parquet_s3_is_valid_server_option(DefElem *def);
 parquet_s3_server_opt *parquet_s3_get_options(Oid foreignoid);
 parquet_s3_server_opt *parquet_s3_get_server_options(Oid serverid);
+
+extern
+#if (PG_VERSION_NUM >=160000)
+PGDLLEXPORT
+#endif
+int	ExecForeignDDL(Oid serverOid,
+				   Relation rel,
+				   int operation,
+				   bool if_not_exists);
 
 /* Option name for CREATE FOREIGN SERVER. */
 #define SERVER_OPTION_USE_MINIO "use_minio"
