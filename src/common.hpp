@@ -37,13 +37,19 @@ extern "C"
 #define to_postgres_timestamp(tstype, i, ts)                    \
     switch ((tstype)->unit()) {                                 \
         case arrow::TimeUnit::SECOND:                           \
-            ts = time_t_to_timestamptz((i)); break;             \
+            ts = time_t_to_timestamptz((i));                    \
+            break;                                              \
         case arrow::TimeUnit::MILLI:                            \
-            ts = time_t_to_timestamptz((i) / 1000); break;      \
+            ts = time_t_to_timestamptz((i) / 1000);             \
+            ts = TimestampTzPlusMilliseconds(ts, i % 1000);     \
+            break;                                              \
         case arrow::TimeUnit::MICRO:                            \
-            ts = time_t_to_timestamptz((i) / 1000000); break;   \
+            ts = time_t_to_timestamptz((i) / 1000000);          \
+            ts = ((ts) + (i % 1000000));                        \
+            break;                                              \
         case arrow::TimeUnit::NANO:                             \
-            ts = time_t_to_timestamptz((i) / 1000000000); break;\
+            ts = time_t_to_timestamptz((i) / 1000000000);       \
+            break;                                              \
         default:                                                \
             elog(ERROR, "parquet_s3_fdw: Timestamp of unknown precision: %d",   \
                  (tstype)->unit());                             \
@@ -79,7 +85,10 @@ Oid jbvType_to_postgres_type(jbvType jbv_type);
 bool is_dir_exist(const std::string& path);
 bool is_file_exist(const std::string& path);
 bool make_path(const std::string& path);
+void delete_folder_tree(const char *path);
 int remove_directory_if_empty(const char *path);
 int64 to_parquet_timestamp(arrow::TimeUnit::type tsunit, Timestamp ts);
 int32 to_parquet_date32(DateADT date);
+int32 string_to_int32(const char *s);
+
 #endif

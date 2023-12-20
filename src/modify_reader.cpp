@@ -1309,7 +1309,7 @@ ModifyParquetReader::create_arrow_table()
                         {
                             /* Get inform of each row of column LIST type, each value is struct parquet_list_value */
                             parquet_list_value list_type = *((parquet_list_value *) column[row_idx]);
-                            builder.Append();
+                            PARQUET_THROW_NOT_OK(builder.Append());
                             builder_append_primitive_type(builder.value_builder(), this->types[col_idx].children[0],
                                                           list_type.listValues, list_type.listIsNULL, list_type.len, false);
                         }
@@ -1337,7 +1337,7 @@ ModifyParquetReader::create_arrow_table()
                         {
                             parquet_map_value map_value = *((parquet_map_value *)column[row_idx]);
                             /* start add value */
-                            builder.Append();
+                            PARQUET_THROW_NOT_OK(builder.Append());
                             builder_append_primitive_type(builder.key_builder(), this->types[col_idx].children[0],
                                                           map_value.keys, map_value.key_nulls, map_value.len, false);
                             builder_append_primitive_type(builder.item_builder(), this->types[col_idx].children[1],
@@ -1388,7 +1388,11 @@ ModifyParquetReader::upload(const char *dirname, Aws::S3::S3Client *s3_client)
     parquet_write_file(dirname, s3_client, *table);
     INSTR_TIME_SET_CURRENT(duration);
     INSTR_TIME_SUBTRACT(duration, start);
+#if PG_VERSION_NUM >= 160000
+    elog(DEBUG1, "'%s' file has been uploaded in %ld seconds %ld microseconds.", this->filename.c_str(), (long int) INSTR_TIME_GET_DOUBLE(duration), (long int) INSTR_TIME_GET_MICROSEC(duration));
+#else
     elog(DEBUG1, "'%s' file has been uploaded in %ld seconds %ld microseconds.", this->filename.c_str(), duration.tv_sec, duration.tv_nsec / 1000);
+#endif
 }
 
 /**
@@ -2371,7 +2375,7 @@ ModifyParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<i
         if (!parquet::arrow::SchemaManifest::Make(p_schema, nullptr, props, &manifest).ok())
             throw std::runtime_error("parquet_s3_fdw: error creating arrow schema");
 
-        parquet::arrow::FromParquetSchema(p_schema, &this->file_schema);
+        PARQUET_THROW_NOT_OK(parquet::arrow::FromParquetSchema(p_schema, &this->file_schema));
     }
 
     schema = this->file_schema;

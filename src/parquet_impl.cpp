@@ -65,6 +65,7 @@ extern "C"
 #include "nodes/parsenodes.h"
 #include "optimizer/appendinfo.h"
 #include "optimizer/cost.h"
+#include "optimizer/inherit.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
@@ -83,6 +84,7 @@ extern "C"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
 #include "utils/typcache.h"
+#include "utils/varlena.h"
 #include "funcapi.h"
 
 #if PG_VERSION_NUM < 120000
@@ -112,6 +114,8 @@ extern "C"
 #define IS_KEY_COLUMN(A)        ((strcmp(def->defname, "key") == 0) && \
                                  (defGetBoolean(def) == true))
 
+#define SPD_CMD_CREATE 0
+#define SPD_CMD_DROP 1
 
 bool enable_multifile;
 bool enable_multifile_merge;
@@ -550,8 +554,8 @@ convert_const(Const *c, Oid dst_oid)
                 getTypeOutputInfo(c->consttype, &output_fn, &isvarlena);
                 getTypeInputInfo(dst_oid, &input_fn, &input_param);
 
-                str = DatumGetCString(OidOutputFunctionCall(output_fn,
-                                                            c->constvalue));
+                str = OidOutputFunctionCall(output_fn,
+                                            c->constvalue);
                 newc->constvalue = OidInputFunctionCall(input_fn, str,
                                                         input_param, 0);
 
@@ -587,7 +591,7 @@ row_group_matches_filter(parquet::Statistics *stats,
          */
 
         /*
-         * Extract the key type (we don't check correctness here as we've 
+         * Extract the key type (we don't check correctness here as we've
          * already done this in `extract_rowgroups_list()`)
          */
         auto strct = arrow_type->fields()[0];
@@ -826,7 +830,8 @@ extract_rowgroups_list(const char *filename,
         }
 
         if (!status.ok())
-            throw Error("parquet_s3_fdw: failed to open Parquet file %s", status.message().c_str());
+            throw Error("parquet_s3_fdw: failed to open Parquet file: %s ('%s')",
+                        status.message().c_str(), filename);
 
         auto meta = reader->parquet_reader()->metadata();
         parquet::ArrowReaderProperties  props;
@@ -835,7 +840,7 @@ extract_rowgroups_list(const char *filename,
         status = parquet::arrow::SchemaManifest::Make(meta->schema(), nullptr,
                                                       props, &manifest);
         if (!status.ok())
-            throw Error("parquet_s3_fdw: error creating arrow schema");
+            throw Error("parquet_s3_fdw: error creating arrow schema ('%s')", filename);
 
         /* Check each row group whether it matches the filters */
         for (int r = 0; r < reader->num_row_groups(); r++)
@@ -990,8 +995,8 @@ extract_rowgroups_list(const char *filename,
         if (reader_entry)
             reader_entry->file_reader->reader = std::move(reader);
         elog(ERROR,
-             "parquet_s3_fdw: failed to exctract row groups from Parquet file: %s",
-             error.c_str());
+             "parquet_s3_fdw: failed to extract row groups from Parquet file: %s ('%s')",
+             error.c_str(), filename);
     }
 
     return rowgroups;
@@ -1040,12 +1045,12 @@ extract_parquet_fields(const char *path, const char *dirname, Aws::S3::S3Client 
                         &reader);
         }
         if (!status.ok())
-            throw Error("parquet_s3_fdw: failed to open Parquet file %s",
-                                 status.message().c_str());
+            throw Error("parquet_s3_fdw: failed to open Parquet file %s ('%s')",
+                        status.message().c_str(), path);
 
         auto p_schema = reader->parquet_reader()->metadata()->schema();
         if (!parquet::arrow::SchemaManifest::Make(p_schema, nullptr, props, &manifest).ok())
-            throw std::runtime_error("parquet_s3_fdw: error creating arrow schema");
+            throw Error("parquet_s3_fdw: error creating arrow schema ('%s')", path);
 
         fields = (FieldInfo *) exc_palloc(
                 sizeof(FieldInfo) * manifest.schema_fields.size());
@@ -1065,7 +1070,7 @@ extract_parquet_fields(const char *path, const char *dirname, Aws::S3::S3Client 
                     bool    error = false;
 
                     if (type->num_fields() != 1)
-                        throw std::runtime_error("lists of structs are not supported");
+                        throw Error("lists of structs are not supported ('%s')", path);
 
                     subtype_id = get_arrow_list_elem_type(type.get());
                     pg_subtype = to_postgres_type(subtype_id);
@@ -1082,7 +1087,8 @@ extract_parquet_fields(const char *path, const char *dirname, Aws::S3::S3Client 
                     PG_END_TRY();
 
                     if (error)
-                        throw std::runtime_error("failed to get the type of array elements");
+                        throw Error("failed to get the type of array elements for %d",
+                                    pg_subtype);
                     break;
                 }
                 case arrow::Type::MAP:
@@ -1104,7 +1110,7 @@ extract_parquet_fields(const char *path, const char *dirname, Aws::S3::S3Client 
             }
             else
             {
-                throw Error("parquet_s3_fdw: cannot convert field '%s' of type '%s' in %s",
+                throw Error("parquet_s3_fdw: cannot convert field '%s' of type '%s' in '%s'",
                             field->name().c_str(), type->name().c_str(), path);
             }
         }
@@ -1352,7 +1358,11 @@ get_filenames_from_userfunc(const char *funcname, const char *funcarg)
 {
     Jsonb      *j = NULL;
     Oid         funcid;
+#if PG_VERSION_NUM >= 160000
+    List       *f = stringToQualifiedNameList(funcname, NULL);
+#else
     List       *f = stringToQualifiedNameList(funcname);
+#endif
     Datum       filenames;
     Oid         jsonboid = JSONBOID;
     Datum      *values;
@@ -1446,7 +1456,7 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
 #if PG_VERSION_NUM >= 150000
             fdw_private->max_open_files = pg_strtoint32(defGetString(def));
 #else
-            fdw_private->max_open_files = pg_atoi(defGetString(def), sizeof(int32), '\0');
+            fdw_private->max_open_files = string_to_int32(defGetString(def));
 #endif
         }
         else if (strcmp(def->defname, "files_in_order") == 0)
@@ -1480,7 +1490,7 @@ parquetGetForeignRelSize(PlannerInfo *root,
 {
     ParquetFdwPlanState *fdw_private;
     std::list<RowGroupFilter> filters;
-    RangeTblEntry  *rte;
+    RangeTblEntry  *rte = planner_rt_fetch(baserel->relid, root);
     Relation        rel;
     TupleDesc       tupleDesc;
     List           *filenames_orig;
@@ -1499,7 +1509,15 @@ parquetGetForeignRelSize(PlannerInfo *root,
     }
 
     if (IS_S3_PATH(fdw_private->dirname) || parquetIsS3Filenames(fdw_private->filenames))
-        fdw_private->s3client = parquetGetConnectionByTableid(foreigntableid);
+    {
+#if (PG_VERSION_NUM < 160000)
+        Oid         userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+#else
+        Oid         userid = OidIsValid(baserel->userid) ? baserel->userid : GetUserId();
+#endif
+
+        fdw_private->s3client = parquetGetConnectionByTableid(foreigntableid, userid);
+    }
     else
         fdw_private->s3client = NULL;
     get_filenames_in_dir(fdw_private);
@@ -1512,7 +1530,6 @@ parquetGetForeignRelSize(PlannerInfo *root,
     else
         extract_rowgroup_filters(baserel->baserestrictinfo, filters);
 
-    rte = root->simple_rte_array[baserel->relid];
 #if PG_VERSION_NUM < 120000
     rel = heap_open(rte->relid, AccessShareLock);
 #else
@@ -1529,8 +1546,8 @@ parquetGetForeignRelSize(PlannerInfo *root,
     fdw_private->filenames = NIL;
     foreach (lc, filenames_orig)
     {
-        char *filename = strVal((Node *)lfirst(lc));
-        List *rowgroups = extract_rowgroups_list(filename, fdw_private->dirname, fdw_private->s3client, 
+        char *filename = strVal(lfirst(lc));
+        List *rowgroups = extract_rowgroups_list(filename, fdw_private->dirname, fdw_private->s3client,
                                                  tupleDesc, filters, &matched_rows, &total_rows, fdw_private->schemaless);
 
         if (rowgroups)
@@ -1770,10 +1787,65 @@ schemaless_get_sorted_column_type(Aws::S3::S3Client *s3_client, List *file_list,
     elog(ERROR, "parquet_s3_fdw: '%s' column is not existed.", (char *) list_nth(attrs_sorted, list_length(*attrs_sorted_type)));
 }
 
+/*
+ * create_path_key_from_sorted_option
+ *      Create PathKey for the attribute from "sorted" option
+ */
 static List *
-schemaless_build_path_key(PlannerInfo *root, RelOptInfo *baserel, ParquetFdwPlanState *fdw_private)
+create_path_key_from_sorted_option(PlannerInfo *root,
+                                   PathKey *root_pathkey,
+                                   Oid typid,
+                                   Relids relids,
+                                   Expr *expr,
+                                   List *existed_pathkeys)
 {
-    ListCell       *lc1, *lc2;
+    List       *attr_pathkeys = NIL;
+    Oid         sort_op;
+
+    /* Lookup sorting operator for the attribute type */
+    get_sort_group_operators(typid,
+                            true, false, false,
+                            &sort_op, NULL, NULL,
+                            NULL);
+
+    /* Create PathKey for the attribute from "sorted" option */
+#if PG_VERSION_NUM >= 160000
+    attr_pathkeys = build_expression_pathkey(root, expr,
+                                             sort_op, relids,
+                                             true);
+# else
+    attr_pathkeys = build_expression_pathkey(root, expr, NULL,
+                                             sort_op, relids,
+                                             true);
+#endif
+
+    if (attr_pathkeys != NIL)
+    {
+        PathKey    *attr_pathkey = (PathKey *) linitial(attr_pathkeys);
+
+        /*
+         * Compare the attribute from "sorted" option and the attribute from
+         * ORDER BY clause ("root"). If they don't match stop here and use
+         * whatever pathkeys we've build so far. Postgres will use remaining
+         * attributes from ORDER BY clause to sort data on higher level of
+         * execution.
+         */
+        if (equal(attr_pathkey, root_pathkey))
+        {
+            if (existed_pathkeys == NIL)
+                return attr_pathkeys;
+            else
+                return list_concat(existed_pathkeys, attr_pathkeys);
+        }
+    }
+
+    return NIL;
+}
+
+static List *
+schemaless_build_path_key(PlannerInfo *root, RelOptInfo *baserel, ParquetFdwPlanState *fdw_private, List *root_sort_pathkeys)
+{
+    ListCell       *lc1, *lc2, *lc3;
     List           *pathkeys = NIL;
     Oid             relid = root->simple_rte_array[baserel->relid]->relid;
     Relation        rel;
@@ -1788,14 +1860,13 @@ schemaless_build_path_key(PlannerInfo *root, RelOptInfo *baserel, ParquetFdwPlan
     /* get the actual column type */
     schemaless_get_sorted_column_type(fdw_private->s3client, fdw_private->filenames, fdw_private->dirname, fdw_private->attrs_sorted, &attrs_sorted_type);
 
-    forboth (lc1, fdw_private->attrs_sorted, lc2, attrs_sorted_type)
+    forthree (lc1, fdw_private->attrs_sorted, lc2, attrs_sorted_type, lc3, root_sort_pathkeys)
     {
         char       *attname = (char *) lfirst(lc1);
         Oid         atttype = lfirst_oid(lc2);
+        PathKey    *root_pathkey = (PathKey *) lfirst(lc3);
         int32       typmod;
-        Oid         sort_op;
         Expr       *expr;
-        List       *schemaless_pathkey;
         int         jsonb_col_attnum;
         TupleDesc   tupdesc = RelationGetDescr(rel);
 
@@ -1835,16 +1906,8 @@ schemaless_build_path_key(PlannerInfo *root, RelOptInfo *baserel, ParquetFdwPlan
                                 atttype, -1,
                                 COERCION_EXPLICIT, COERCE_EXPLICIT_CAST, -1);
 
-                /* Lookup sorting operator for the attribute type */
-                get_sort_group_operators(atttype,
-                                        true, false, false,
-                                        &sort_op, NULL, NULL,
-                                        NULL);
-
-                schemaless_pathkey = build_expression_pathkey(root, expr, NULL,
-                                                             sort_op, baserel->relids,
-                                                             true);
-                pathkeys = list_concat(pathkeys, schemaless_pathkey);
+                pathkeys = create_path_key_from_sorted_option(root, root_pathkey, atttype,
+                                                              baserel->relids, expr, pathkeys);
                 break;
             }
         }
@@ -1875,6 +1938,7 @@ parquetGetForeignPaths(PlannerInfo *root,
     List       *pathkeys = NIL;
     std::list<RowGroupFilter> filters;
     ListCell   *lc;
+    ListCell   *lc2;
     bool        schemaless;
 
     fdw_private = (ParquetFdwPlanState *) baserel->fdw_private;
@@ -1892,39 +1956,46 @@ parquetGetForeignPaths(PlannerInfo *root,
 
     if (schemaless)
     {
-        pathkeys = schemaless_build_path_key(root, baserel, fdw_private);
+        pathkeys = schemaless_build_path_key(root, baserel, fdw_private, root->sort_pathkeys);
     }
     else
     {
-        /* Build pathkeys based on attrs_sorted */
-        foreach (lc, fdw_private->attrs_sorted)
+        /*
+         * Build pathkeys for the foreign table based on attrs_sorted and ORDER BY
+         * clause passed by user.
+         *
+         * pathkeys is used by Postgres to sort the result. After we build pathkeys
+         * for the foreign table Postgres will assume that the returned data is
+         * already sorted. In the function parquetBeginForeignScan() we make sure
+         * that the data from parquet files are sorted.
+         *
+         * We need to make sure that we don't add PathKey for an attribute which is
+         * not passed by ORDER BY. We will stop building pathkeys as soon as we see
+         * that an attribute on ORDER BY and "sorted" doesn't match, since in that
+         * case Postgres will need to sort by remaining attributes by itself.
+         */
+        forboth (lc, fdw_private->attrs_sorted, lc2, root->sort_pathkeys)
         {
+            PathKey    *root_pathkey = (PathKey *) lfirst(lc2);
             Oid         relid = root->simple_rte_array[baserel->relid]->relid;
-            int         attnum;
+            int         attnum = lfirst_int(lc);
             Oid         typid,
                         collid;
             int32       typmod;
-            Oid         sort_op;
             Var        *var;
-            List       *attr_pathkey;
+
+            if (root_pathkey->pk_eclass->ec_has_volatile)
+                break;
 
             if ((attnum = get_attnum(relid, (char *)lfirst(lc))) == InvalidAttrNumber)
                 elog(ERROR, "parquet_s3_fdw: invalid attribute name '%s'", (char *)lfirst(lc));
 
-            /* Build an expression (simple var) */
+            /* Build an expression (simple var) for the attribute */
             get_atttypetypmodcoll(relid, attnum, &typid, &typmod, &collid);
             var = makeVar(baserel->relid, attnum, typid, typmod, collid, 0);
 
-            /* Lookup sorting operator for the attribute type */
-            get_sort_group_operators(typid,
-                                    true, false, false,
-                                    &sort_op, NULL, NULL,
-                                    NULL);
-
-            attr_pathkey = build_expression_pathkey(root, (Expr *) var, NULL,
-                                                    sort_op, baserel->relids,
-                                                    true);
-            pathkeys = list_concat(pathkeys, attr_pathkey);
+            pathkeys = create_path_key_from_sorted_option(root, root_pathkey, typid,
+                                                          baserel->relids, (Expr *) var, pathkeys);
         }
     }
 
@@ -2188,16 +2259,16 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
                 attrs_sorted = (List *) lfirst(lc);
                 break;
             case FdwScanPrivateUseMmap:
-                use_mmap = (bool) intVal((Node *) lfirst(lc));
+                use_mmap = (bool) intVal(lfirst(lc));
                 break;
             case FdwScanPrivateUse_Threads:
-                use_threads = (bool) intVal((Node *) lfirst(lc));
+                use_threads = (bool) intVal(lfirst(lc));
                 break;
             case FdwScanPrivateType:
-                reader_type = (ReaderType) intVal((Node *) lfirst(lc));
+                reader_type = (ReaderType) intVal(lfirst(lc));
                 break;
             case FdwScanPrivateMaxOpenFiles:
-                max_open_files = intVal((Node *) lfirst(lc));
+                max_open_files = intVal(lfirst(lc));
                 break;
             case FdwScanPrivateRowGroups:
                 rowgroups_list = (List *) lfirst(lc);
@@ -2222,7 +2293,27 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
             {
                 /* Recreate S3 handle by foreign table id. */
                 Oid s3tableoid = intVal((Node *) lfirst(lc));
-                s3client = parquetGetConnectionByTableid(s3tableoid);
+#if PG_VERSION_NUM < 160000
+                int     rtindex;
+                ForeignScan *fsplan = (ForeignScan *) node->ss.ps.plan;
+                RangeTblEntry *rte;
+                Oid     userid;
+
+                if (fsplan->scan.scanrelid > 0)
+                    rtindex = fsplan->scan.scanrelid;
+                else
+                    rtindex = bms_next_member(fsplan->fs_relids, -1);
+
+                rte = rt_fetch(rtindex, estate->es_range_table);
+                userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+#else
+                /*
+                 * Identify which user to do the remote access as.  This should match what
+                 * ExecCheckPermissions() does.
+                 */
+                Oid     userid = OidIsValid(plan->checkAsUser) ? plan->checkAsUser : GetUserId();
+#endif
+                s3client = parquetGetConnectionByTableid(s3tableoid, userid);
                 break;
             }
         }
@@ -2302,7 +2393,7 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
 
         forboth (lc, filenames, lc2, rowgroups_list)
         {
-            char *filename = strVal((Node *) lfirst(lc));
+            char *filename = strVal(lfirst(lc));
             List *rowgroups = (List *) lfirst(lc2);
 
             festate->add_file(filename, rowgroups);
@@ -2437,7 +2528,7 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
                                        "parquet_s3_fdw tuple data",
                                        ALLOCSET_DEFAULT_SIZES);
     if (IS_S3_PATH(fdw_private.dirname) || parquetIsS3Filenames(fdw_private.filenames))
-        fdw_private.s3client = parquetGetConnectionByTableid(RelationGetRelid(relation));
+        fdw_private.s3client = parquetGetConnectionByTableid(RelationGetRelid(relation), relation->rd_rel->relowner);
     else
         fdw_private.s3client = NULL;
     get_filenames_in_dir(&fdw_private);
@@ -2460,7 +2551,7 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
 
     foreach (lc, fdw_private.filenames)
     {
-        char *filename = strVal((Node *) lfirst(lc));
+        char *filename = strVal(lfirst(lc));
 
         try
         {
@@ -2593,7 +2684,7 @@ parquetExplainForeignScan(ForeignScanState *node, ExplainState *es)
 
     fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
     filenames = (List *) linitial(fdw_private);
-    reader_type = (ReaderType) intVal((Node *) list_nth(fdw_private, FdwScanPrivateType));
+    reader_type = (ReaderType) intVal(list_nth(fdw_private, FdwScanPrivateType));
     rowgroups_list = (List *) list_nth(fdw_private, FdwScanPrivateRowGroups);
 
     switch (reader_type)
@@ -2617,7 +2708,7 @@ parquetExplainForeignScan(ForeignScanState *node, ExplainState *es)
 
     forboth(lc, filenames, lc2, rowgroups_list)
     {
-        char   *filename = strVal((Node *) lfirst(lc));
+        char   *filename = strVal(lfirst(lc));
         List   *rowgroups = (List *) lfirst(lc2);
         bool    is_first = true;
 
@@ -2855,10 +2946,10 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
             foreach(lc, filenames)
             {
                 struct stat stat_buf;
-                char       *fn = strVal((Node *) lfirst(lc));
+                char       *fn = strVal(lfirst(lc));
 
-               if (IS_S3_PATH(fn))
-                   continue;
+                if (IS_S3_PATH(fn))
+                    continue;
 
                 if (stat(fn, &stat_buf) != 0)
                 {
@@ -2876,7 +2967,11 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
         else if (strcmp(def->defname, "files_func") == 0)
         {
             Oid     jsonboid = JSONBOID;
-            List   *funcname = stringToQualifiedNameList(defGetString(def)); 
+#if PG_VERSION_NUM >= 160000
+            List   *funcname = stringToQualifiedNameList(defGetString(def), NULL);
+#else
+            List   *funcname = stringToQualifiedNameList(defGetString(def));
+#endif
             Oid     funcoid;
             Oid     rettype;
 
@@ -2894,7 +2989,7 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
         }
         else if (strcmp(def->defname, "files_func_arg") == 0)
         {
-            /* 
+            /*
              * Try to convert the string value into JSONB to validate it is
              * properly formatted.
              */
@@ -2949,7 +3044,7 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
 #if PG_VERSION_NUM >= 150000
             pg_strtoint32(defGetString(def));
 #else
-            pg_atoi(defGetString(def), sizeof(int32), '\0');
+            string_to_int32(defGetString(def));
 #endif
         }
         else if (strcmp(def->defname, "files_in_order") == 0)
@@ -2972,10 +3067,30 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
         }
         else
         {
+#if PG_VERSION_NUM >= 160000
+            /*
+            * Unknown option specified, complain about it. Provide a hint
+            * with a valid option that looks similar, if there is one.
+            */
+            const char *closest_match;
+            ClosestMatchState match_state;
+            bool		has_valid_options = false;
+
+            initClosestMatch(&match_state, def->defname, 4);
+            closest_match = getClosestMatch(&match_state);
+            ereport(ERROR,
+                    (errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
+                        errmsg("parquet_s3_fdw: invalid option \"%s\"", def->defname),
+                        has_valid_options ? closest_match ?
+                        errhint("parquet_s3_fdw: Perhaps you meant the option \"%s\".",
+                                closest_match) : 0 :
+                        errhint("parquet_s3_fdw: There are no valid options in this context.")));
+#else
             ereport(ERROR,
                     (errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
                      errmsg("parquet_s3_fdw: invalid option \"%s\"",
                             def->defname)));
+#endif
         }
     }
 
@@ -3581,8 +3696,15 @@ parquetPlanForeignModify(PlannerInfo *root,
     else if (operation == CMD_UPDATE)
     {
         AttrNumber  col;
+#if (PG_VERSION_NUM >= 130010 && PG_VERSION_NUM < 140000) || \
+    (PG_VERSION_NUM >= 140007 && PG_VERSION_NUM < 150000) || \
+    (PG_VERSION_NUM >= 150002 && PG_VERSION_NUM < 160000) || \
+    (PG_VERSION_NUM >= 160000)
+        RelOptInfo *rel = find_base_rel(root, resultRelation);
+        Bitmapset  *allUpdatedCols = get_rel_all_updated_cols(root, rel);
+#else
         Bitmapset  *allUpdatedCols = bms_union(rte->updatedCols, rte->extraUpdatedCols);
-
+#endif
         col = -1;
         while ((col = bms_next_member(allUpdatedCols, col)) >= 0)
         {
@@ -3679,6 +3801,7 @@ parquetBeginForeignModify(ModifyTableState *mtstate,
     std::set<std::string>   key_attrs;
     std::set<int>           target_attrs;
     MemoryContextCallback  *callback;
+    Oid                     userid = InvalidOid;
 
 #if (PG_VERSION_NUM >= 140000)
     subplan = outerPlanState(mtstate)->plan;
@@ -3704,7 +3827,21 @@ parquetBeginForeignModify(ModifyTableState *mtstate,
 
     /* Get S3 connection */
     if (IS_S3_PATH(plstate->dirname) || parquetIsS3Filenames(plstate->filenames))
-        plstate->s3client = parquetGetConnectionByTableid(foreignTableId);
+    {
+#if PG_VERSION_NUM < 160000
+        /*
+         * Identify which user to do the remote access as.  This should match what
+         * ExecCheckRTEPerms() does.
+         */
+        RangeTblEntry *rte = rt_fetch(resultRelInfo->ri_RangeTableIndex, estate->es_range_table);
+
+        userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+#else
+        /* Identify which user to do the remote access as. */
+        userid = ExecGetResultRelCheckAsUser(resultRelInfo, estate);
+#endif
+        plstate->s3client = parquetGetConnectionByTableid(foreignTableId, userid);
+    }
     else
         plstate->s3client = NULL;
 
@@ -3901,7 +4038,11 @@ get_selected_file_from_userfunc(char *func_signature, TupleTableSlot *slot, cons
 
     parse_function_signature(func_signature, funcname, param_names);
 
+#if PG_VERSION_NUM >= 160000
+    f = stringToQualifiedNameList(funcname.c_str(), NULL);
+#else
     f = stringToQualifiedNameList(funcname.c_str());
+#endif
 
     nargs = param_names.size();
     funcargtypes = (Oid *) palloc0(sizeof(Oid) * nargs);
@@ -4000,4 +4141,237 @@ parse_function_signature(char *signature, std::string &funcname, std::vector<std
         arg_list.erase(0, pos + 1);
     }
     while (pos != std::string::npos);
+}
+
+/*
+ * check data source is existed or not.
+ *        if dirname specify: return true if dirname has any parquet files. Otherwise return false.
+ *        if filename specify: return true if any file in "filenames" existed. Otherwise return false.
+ */
+static bool
+parquet_s3_datasource_is_exists(const char *dirname, List *filenames, Aws::S3::S3Client *s3_client, bool error_if_exists)
+{
+    if (dirname != NULL)
+    {
+        /* either filenames or dirname can be specified */
+        Assert(filenames == NULL);
+
+        /* check directory empty or not */
+        if (s3_client)
+            filenames = parquetGetS3ObjectList(s3_client, dirname);
+        else
+            filenames = parquetGetDirFileList(filenames, dirname);
+
+        if (filenames != NULL)
+        {
+            if (error_if_exists)
+                elog(ERROR, "parquet_s3_fdw: '%s' already existed", dirname);
+            return true;
+        }
+        else
+            return false;
+    }
+    else    /* filenames specified */
+    {
+        ListCell   *lc;
+
+        foreach(lc, filenames)
+        {
+            char       *fn = strVal((Node *) lfirst(lc));
+
+            if (s3_client)
+            {
+                char       *bucket;
+                char       *filepath;
+
+                parquetSplitS3Path(dirname, fn, &bucket, &filepath);
+                if (parquet_is_object_exist(bucket, filepath, s3_client))
+                {
+                    if (error_if_exists)
+                        elog(ERROR, "parquet_s3_fdw: '%s' already existed.", fn);
+                    return true;
+                }
+
+                pfree(bucket);
+                pfree(filepath);
+            }
+            else
+            {
+                if (is_file_exist(fn))
+                {
+                    if (error_if_exists)
+                        elog(ERROR, "parquet_s3_fdw: '%s' already existed.", fn);
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
+/*
+ * remove datasource file:
+ *  - file name list: delete all files
+ *  - dirname: delete all content in this directory
+ *  - s3_client: connection to foreign server
+ *  - skip_not_exist_error: true `IF EXIST` is specified
+ */
+void
+parquet_s3_delete_datasource(const char *dirname, List *filenames, Aws::S3::S3Client *s3_client, bool skip_not_exist_error)
+{
+    ListCell *lc;
+
+    /*
+     * if dirname is s3 path then get list object from dirname.
+     * if dirname is local path then delete folder tree.
+     */
+    if(dirname)
+    {
+        if (IS_S3_PATH(dirname))
+        {
+            filenames = parquetGetS3ObjectList(s3_client, dirname);
+            if (!filenames)
+            {
+                if (!skip_not_exist_error)
+                    elog(ERROR, "parquet_s3_fdw: dirname '%s' does not exist from bucket.", dirname);
+            }
+        }
+        else
+        {
+            /* delete all content of local directory */
+            delete_folder_tree(dirname);
+            return;
+        }
+    }
+
+    /*
+     * 'filename' option or dirname option with s3-path is specified.
+     * remove all file in file name list.
+     */
+    foreach (lc, filenames)
+    {
+        char           *bucket;
+        char           *filepath;
+        char           *filename;
+
+        filename = strVal(lfirst(lc));
+
+        /* filename is specified with local */
+        if (dirname == NULL && !IS_S3_PATH(filename))
+        {
+            /* filename is in local storage */
+            std::remove(filename);
+        }
+        else
+        {
+            /* filename is object on S3 (not include 's3://bucketname') */
+            parquetSplitS3Path(dirname, filename, &bucket, &filepath);
+
+            if (parquet_is_object_exist(bucket, filepath, s3_client))
+                parquet_delete_object(bucket, filepath, s3_client);
+            else
+            {
+                if (!skip_not_exist_error)
+                    elog(ERROR, "parquet_s3_fdw: Object '%s' does not exist from bucket '%s'.", filepath, bucket);
+            }
+            pfree(bucket);
+            pfree(filepath);
+        }
+    }
+    /* Releasing resource */
+    parquetReleaseConnection(s3_client);
+}
+
+/*
+ * ExecForeignDDL is a public function that is called by core code.
+ * It executes DDL command on remote server.
+ *
+ * serverOid: remote server to get connected
+ * rel: relation to be created
+ * operation:
+ *      0: CREATE command
+ *      1: DROP command
+ * exists_flag:
+ *      in CREATE DDL: true if `IF NOT EXIST` is specified
+ *      in DROP DDL: true if `IF EXIST` is specified
+ */
+#if (PG_VERSION_NUM >=160000)
+PGDLLEXPORT
+#endif
+int ExecForeignDDL(Oid serverOid,
+                   Relation rel,
+                   int operation,
+                   bool exists_flag)
+{
+    bool            use_minio = false;
+    ForeignTable   *table;
+    ForeignServer  *server;
+    UserMapping    *user = NULL;
+    char           *dirname = NULL;
+    List           *filenames = NULL;
+    ListCell       *lc;
+    Aws::S3::S3Client *s3_client;
+
+    elog(DEBUG1, "parquet_s3_fdw: %s", __func__);
+
+    if (operation !=  SPD_CMD_CREATE && operation != SPD_CMD_DROP)
+    {
+        elog(ERROR, "parquet_s3_fdw: Only support CREATE/DROP DATASOURCE");
+    }
+
+    /*
+     * Get option information from foreign server and foreign table.
+     * Get connection to the foreign server. Connection manager will
+     * establish new connection if necessary.
+     */
+    server = GetForeignServer(serverOid);
+    table = GetForeignTable(RelationGetRelid(rel));
+    user = GetUserMapping(GetUserId(), serverOid);
+
+    foreach(lc, server->options)
+    {
+        DefElem    *def = (DefElem *) lfirst(lc);
+
+        if (strcmp(def->defname, SERVER_OPTION_USE_MINIO) == 0)
+        {
+            use_minio = defGetBoolean(def);
+            break;
+        }
+    }
+
+    foreach(lc, table->options)
+    {
+        DefElem    *def = (DefElem *) lfirst(lc);
+
+        if (strcmp(def->defname, "filename") == 0)
+            filenames = parse_filenames_list(defGetString(def));
+        if (strcmp(def->defname, "dirname") == 0)
+            dirname = defGetString(def);
+    }
+
+    if (IS_S3_PATH(dirname) || parquetIsS3Filenames(filenames))
+        s3_client = parquetGetConnection(user, use_minio);
+    else
+        s3_client = NULL;
+
+    /* SPD_CMD_CREATE */
+    if (operation == SPD_CMD_CREATE)
+    {
+        /* 'IF NOT EXISTS' does not specified, raise error if datasource already exist */
+        if (exists_flag == false)
+            parquet_s3_datasource_is_exists(dirname, filenames, s3_client, true);
+
+        /* Releasing resource */
+        parquetReleaseConnection(s3_client);
+
+        /* The new file will be created during INSERT, so it just return success */
+        return 0;
+    }
+
+    /* SPD_CMD_DROP */
+    if (operation == SPD_CMD_DROP)
+        parquet_s3_delete_datasource(dirname, filenames, s3_client, exists_flag);
+
+    return 0;
 }

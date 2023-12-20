@@ -58,6 +58,7 @@ public:
     Size estimate_coord_size() 
     {
         Assert(false && "estimate_coord_size is not supported for TrivialExecutionStateS3");
+        return 0;
     }
     void init_coord()
     {
