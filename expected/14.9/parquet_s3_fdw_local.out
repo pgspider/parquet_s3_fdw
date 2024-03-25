@@ -1,8 +1,11 @@
 \set ECHO none
 show server_version \gset
 \ir sql/:server_version/parquet_s3_fdw.sql
+--Testcase 92:
 SET datestyle = 'ISO';
+--Testcase 93:
 SET client_min_messages = WARNING;
+--Testcase 94:
 SET log_statement TO 'none';
 --Testcase 1:
 CREATE EXTENSION parquet_s3_fdw;
@@ -10,11 +13,13 @@ CREATE EXTENSION parquet_s3_fdw;
 DROP ROLE IF EXISTS regress_parquet_s3_fdw;
 --Testcase 3:
 CREATE ROLE regress_parquet_s3_fdw LOGIN SUPERUSER;
+--Testcase 95:
 SET ROLE regress_parquet_s3_fdw;
 --Testcase 4:
 CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw :USE_MINIO;
 --Testcase 5:
 CREATE USER MAPPING FOR regress_parquet_s3_fdw SERVER parquet_s3_srv :USER_PASSWORD;
+--Testcase 96:
 SET ROLE regress_parquet_s3_fdw;
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
 --Testcase 6:
@@ -82,18 +87,19 @@ EXPLAIN (COSTS OFF) SELECT * FROM example1 ORDER BY three;
 (5 rows)
 
 -- filtering
+--Testcase 97:
 SET client_min_messages = DEBUG1;
 --Testcase 12:
 SELECT * FROM example1 WHERE one < 1;
-psql:sql/14.9/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/14.9/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.9/parquet_s3_fdw.sql:55: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:55: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
 
 --Testcase 13:
 SELECT * FROM example1 WHERE one <= 1;
-psql:sql/14.9/parquet_s3_fdw.sql:51: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.9/parquet_s3_fdw.sql:57: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |   two   | three |        four         |    five    | six | seven 
 -----+---------+-------+---------------------+------------+-----+-------
    1 | {1,2,3} | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
@@ -101,15 +107,15 @@ psql:sql/14.9/parquet_s3_fdw.sql:51: DEBUG:  parquet_s3_fdw: skip rowgroup 2
 
 --Testcase 14:
 SELECT * FROM example1 WHERE one > 6;
-psql:sql/14.9/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/14.9/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.9/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
 
 --Testcase 15:
 SELECT * FROM example1 WHERE one >= 6;
-psql:sql/14.9/parquet_s3_fdw.sql:55: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:61: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  one |    two     | three |           four            |    five    | six | seven 
 -----+------------+-------+---------------------------+------------+-----+-------
    6 | {16,17,18} | tres  | 2018-01-06 00:00:00.00001 | 2018-01-06 | f   |     2
@@ -117,7 +123,7 @@ psql:sql/14.9/parquet_s3_fdw.sql:55: DEBUG:  parquet_s3_fdw: skip rowgroup 1
 
 --Testcase 16:
 SELECT * FROM example1 WHERE one = 2;
-psql:sql/14.9/parquet_s3_fdw.sql:57: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.9/parquet_s3_fdw.sql:63: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |    two     | three |        four         |    five    | six | seven 
 -----+------------+-------+---------------------+------------+-----+-------
    2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00 | 2018-01-02 | f   |      
@@ -125,15 +131,15 @@ psql:sql/14.9/parquet_s3_fdw.sql:57: DEBUG:  parquet_s3_fdw: skip rowgroup 2
 
 --Testcase 17:
 SELECT * FROM example1 WHERE one = 7;
-psql:sql/14.9/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/14.9/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.9/parquet_s3_fdw.sql:65: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:65: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
 
 --Testcase 18:
 SELECT * FROM example1 WHERE six = true;
-psql:sql/14.9/parquet_s3_fdw.sql:61: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.9/parquet_s3_fdw.sql:67: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |   two   | three |        four         |    five    | six | seven 
 -----+---------+-------+---------------------+------------+-----+-------
    1 | {1,2,3} | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
@@ -152,7 +158,7 @@ SELECT * FROM example1 WHERE six = false;
 
 --Testcase 20:
 SELECT * FROM example1 WHERE seven < 1.5;
-psql:sql/14.9/parquet_s3_fdw.sql:65: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.9/parquet_s3_fdw.sql:71: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |   two   | three |        four         |    five    | six | seven 
 -----+---------+-------+---------------------+------------+-----+-------
    1 | {1,2,3} | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
@@ -170,7 +176,7 @@ SELECT * FROM example1 WHERE seven <= 1.5;
 
 --Testcase 22:
 SELECT * FROM example1 WHERE seven = 1.5;
-psql:sql/14.9/parquet_s3_fdw.sql:69: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:75: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  one |    two     | three |        four         |    five    | six | seven 
 -----+------------+-------+---------------------+------------+-----+-------
    4 | {10,11,12} | uno   | 2018-01-04 00:00:10 | 2018-01-04 | f   |   1.5
@@ -178,7 +184,7 @@ psql:sql/14.9/parquet_s3_fdw.sql:69: DEBUG:  parquet_s3_fdw: skip rowgroup 1
 
 --Testcase 23:
 SELECT * FROM example1 WHERE seven > 1;
-psql:sql/14.9/parquet_s3_fdw.sql:71: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:77: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  one |    two     | three |           four            |    five    | six | seven 
 -----+------------+-------+---------------------------+------------+-----+-------
    4 | {10,11,12} | uno   | 2018-01-04 00:00:10       | 2018-01-04 | f   |   1.5
@@ -207,7 +213,7 @@ SELECT * FROM example1 WHERE seven IS NULL;
 prepare prep(date) as select * from example1 where five < $1;
 --Testcase 27:
 execute prep('2018-01-03');
-psql:sql/14.9/parquet_s3_fdw.sql:81: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.9/parquet_s3_fdw.sql:87: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  one |    two     | three |        four         |    five    | six | seven 
 -----+------------+-------+---------------------+------------+-----+-------
    1 | {1,2,3}    | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
@@ -216,29 +222,111 @@ psql:sql/14.9/parquet_s3_fdw.sql:81: DEBUG:  parquet_s3_fdw: skip rowgroup 2
 
 --Testcase 28:
 execute prep('2018-01-01');
-psql:sql/14.9/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/14.9/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/14.9/parquet_s3_fdw.sql:89: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:89: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+ one | two | three | four | five | six | seven 
+-----+-----+-------+------+------+-----+-------
+(0 rows)
+
+-- does not support filtering in string column (no row group skipped)
+--Testcase 227:
+SELECT * FROM example1 WHERE three = 'foo';
+ one |   two   | three |        four         |    five    | six | seven 
+-----+---------+-------+---------------------+------------+-----+-------
+   1 | {1,2,3} | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
+(1 row)
+
+--Testcase 228:
+SELECT * FROM example1 WHERE three > 'TRES';
+ one |    two     | three |        four         |    five    | six | seven 
+-----+------------+-------+---------------------+------------+-----+-------
+   4 | {10,11,12} | uno   | 2018-01-04 00:00:10 | 2018-01-04 | f   |   1.5
+(1 row)
+
+--Testcase 229:
+SELECT * FROM example1 WHERE three >= 'TRES';
+ one |    two     | three |        four         |    five    | six | seven 
+-----+------------+-------+---------------------+------------+-----+-------
+   4 | {10,11,12} | uno   | 2018-01-04 00:00:10 | 2018-01-04 | f   |   1.5
+(1 row)
+
+--Testcase 230:
+SELECT * FROM example1 WHERE three < 'BAZ';
+ one |    two     | three |        four         |    five    | six | seven 
+-----+------------+-------+---------------------+------------+-----+-------
+   2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00 | 2018-01-02 | f   |      
+   3 | {7,8,9}    | baz   | 2018-01-03 00:00:00 | 2018-01-03 | t   |     1
+(2 rows)
+
+--Testcase 231:
+SELECT * FROM example1 WHERE three <= 'BAZ';
+ one |    two     | three |        four         |    five    | six | seven 
+-----+------------+-------+---------------------+------------+-----+-------
+   2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00 | 2018-01-02 | f   |      
+   3 | {7,8,9}    | baz   | 2018-01-03 00:00:00 | 2018-01-03 | t   |     1
+(2 rows)
+
+--Testcase 232:
+SELECT * FROM example1 WHERE three COLLATE "C" = 'foo';
+ one |   two   | three |        four         |    five    | six | seven 
+-----+---------+-------+---------------------+------------+-----+-------
+   1 | {1,2,3} | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
+(1 row)
+
+--Testcase 233:
+SELECT * FROM example1 WHERE three COLLATE "C" > 'TRES';
+ one |    two     | three |           four            |    five    | six | seven 
+-----+------------+-------+---------------------------+------------+-----+-------
+   1 | {1,2,3}    | foo   | 2018-01-01 00:00:00       | 2018-01-01 | t   |   0.5
+   2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00       | 2018-01-02 | f   |      
+   3 | {7,8,9}    | baz   | 2018-01-03 00:00:00       | 2018-01-03 | t   |     1
+   4 | {10,11,12} | uno   | 2018-01-04 00:00:10       | 2018-01-04 | f   |   1.5
+   5 | {13,14,15} | dos   | 2018-01-05 00:00:00.01    | 2018-01-05 | f   |      
+   6 | {16,17,18} | tres  | 2018-01-06 00:00:00.00001 | 2018-01-06 | f   |     2
+(6 rows)
+
+--Testcase 234:
+SELECT * FROM example1 WHERE three COLLATE "C" >= 'TRES';
+ one |    two     | three |           four            |    five    | six | seven 
+-----+------------+-------+---------------------------+------------+-----+-------
+   1 | {1,2,3}    | foo   | 2018-01-01 00:00:00       | 2018-01-01 | t   |   0.5
+   2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00       | 2018-01-02 | f   |      
+   3 | {7,8,9}    | baz   | 2018-01-03 00:00:00       | 2018-01-03 | t   |     1
+   4 | {10,11,12} | uno   | 2018-01-04 00:00:10       | 2018-01-04 | f   |   1.5
+   5 | {13,14,15} | dos   | 2018-01-05 00:00:00.01    | 2018-01-05 | f   |      
+   6 | {16,17,18} | tres  | 2018-01-06 00:00:00.00001 | 2018-01-06 | f   |     2
+(6 rows)
+
+--Testcase 235:
+SELECT * FROM example1 WHERE three COLLATE "C" < 'BAZ';
+ one | two | three | four | five | six | seven 
+-----+-----+-------+------+------+-----+-------
+(0 rows)
+
+--Testcase 236:
+SELECT * FROM example1 WHERE three COLLATE "C" <= 'BAZ';
  one | two | three | four | five | six | seven 
 -----+-----+-------+------+------+-----+-------
 (0 rows)
 
 -- invalid options
+--Testcase 98:
 SET client_min_messages = WARNING;
 --Testcase 29:
 CREATE FOREIGN TABLE example_fail (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv;
-psql:sql/14.9/parquet_s3_fdw.sql:89: ERROR:  parquet_s3_fdw: filename or function is required
+psql:sql/14.9/parquet_s3_fdw.sql:117: ERROR:  parquet_s3_fdw: filename or function is required
 --Testcase 30:
 CREATE FOREIGN TABLE example_fail (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (filename 'nonexistent.parquet', some_option '123');
-psql:sql/14.9/parquet_s3_fdw.sql:93: ERROR:  parquet_s3_fdw: No such file or directory ('nonexistent.parquet')
+psql:sql/14.9/parquet_s3_fdw.sql:121: ERROR:  parquet_s3_fdw: No such file or directory ('nonexistent.parquet')
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
 --Testcase 31:
 CREATE FOREIGN TABLE example_fail (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (filename :'var', some_option '123');
-psql:sql/14.9/parquet_s3_fdw.sql:98: ERROR:  parquet_s3_fdw: invalid option "some_option"
+psql:sql/14.9/parquet_s3_fdw.sql:126: ERROR:  parquet_s3_fdw: invalid option "some_option"
 -- type mismatch
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
 --Testcase 32:
@@ -247,10 +335,10 @@ SERVER parquet_s3_srv
 OPTIONS (filename :'var', sorted 'one');
 --Testcase 33:
 SELECT one FROM example_fail;
-psql:sql/14.9/parquet_s3_fdw.sql:107: ERROR:  parquet_s3_fdw: failed to initialize cast function for column 'one' (parquet_s3_fdw: coercion pathway from 'bigint' to 'bigint[]' not found)
+psql:sql/14.9/parquet_s3_fdw.sql:135: ERROR:  parquet_s3_fdw: failed to initialize cast function for column 'one' (parquet_s3_fdw: coercion pathway from 'bigint' to 'bigint[]' not found)
 --Testcase 34:
 SELECT two FROM example_fail;
-psql:sql/14.9/parquet_s3_fdw.sql:109: ERROR:  parquet_s3_fdw: cannot convert parquet column of type LIST to scalar type of postgres column 'two'
+psql:sql/14.9/parquet_s3_fdw.sql:137: ERROR:  parquet_s3_fdw: cannot convert parquet column of type LIST to scalar type of postgres column 'two'
 -- files_func
 --Testcase 35:
 CREATE FUNCTION list_parquet_s3_files(args JSONB)
@@ -299,17 +387,17 @@ LANGUAGE SQL;
 CREATE FOREIGN TABLE example_inv_func (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (files_func 'int_array_func');
-psql:sql/14.9/parquet_s3_fdw.sql:144: ERROR:  parquet_s3_fdw: return type of 'int_array_func' is integer[]; expected text[]
+psql:sql/14.9/parquet_s3_fdw.sql:172: ERROR:  parquet_s3_fdw: return type of 'int_array_func' is integer[]; expected text[]
 --Testcase 41:
 CREATE FOREIGN TABLE example_inv_func (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (files_func 'no_args_func');
-psql:sql/14.9/parquet_s3_fdw.sql:148: ERROR:  function no_args_func(jsonb) does not exist
+psql:sql/14.9/parquet_s3_fdw.sql:176: ERROR:  function no_args_func(jsonb) does not exist
 --Testcase 42:
 CREATE FOREIGN TABLE example_inv_func (one INT8, two INT8[], three TEXT)
 SERVER parquet_s3_srv
 OPTIONS (files_func 'list_parquet_s3_files', files_func_arg 'invalid json');
-psql:sql/14.9/parquet_s3_fdw.sql:152: ERROR:  invalid input syntax for type json
+psql:sql/14.9/parquet_s3_fdw.sql:180: ERROR:  invalid input syntax for type json
 DETAIL:  Token "invalid" is invalid.
 CONTEXT:  JSON data, line 1: invalid...
 --Testcase 43:
@@ -441,9 +529,63 @@ SELECT * FROM example_sorted_caching ORDER BY one;
    9 | {27,28}    | fünf  | 2018-01-09 00:00:00       | 2018-01-09 | t   |      
 (11 rows)
 
+-- test multiple columns of foreign table map to the same column of parquet file when caching
+-- multifile merge reader
+--Testcase 157:
+ALTER FOREIGN TABLE example_sorted_caching ADD COLUMN eight INT8 OPTIONS (column_name 'one');
+--Testcase 158:
+\dS+ example_sorted_caching;
+                                            Foreign table "public.example_sorted_caching"
+ Column |            Type             | Collation | Nullable | Default |     FDW options     | Storage  | Stats target | Description 
+--------+-----------------------------+-----------+----------+---------+---------------------+----------+--------------+-------------
+ one    | bigint                      |           |          |         |                     | plain    |              | 
+ two    | bigint[]                    |           |          |         |                     | extended |              | 
+ three  | text                        |           |          |         |                     | extended |              | 
+ four   | timestamp without time zone |           |          |         |                     | plain    |              | 
+ five   | date                        |           |          |         |                     | plain    |              | 
+ six    | boolean                     |           |          |         |                     | plain    |              | 
+ seven  | double precision            |           |          |         |                     | plain    |              | 
+ eight  | bigint                      |           |          |         | (column_name 'one') | plain    |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/simple/example1.parquet /tmp/data_local/data/simple/example2.parquet', sorted 'one', max_open_files '1')
+
+--Testcase 159:
+EXPLAIN (COSTS OFF) SELECT * FROM example_sorted_caching ORDER BY one;;
+               QUERY PLAN               
+----------------------------------------
+ Foreign Scan on example_sorted_caching
+   Reader: Caching Multifile Merge
+   Row groups: 
+     example1.parquet: 1, 2
+     example2.parquet: 1
+(5 rows)
+
+--Testcase 160:
+SELECT * FROM example_sorted_caching ORDER BY one;; -- one and eight are both mapped to 'one' column in the data file
+ one |    two     | three |           four            |    five    | six | seven | eight 
+-----+------------+-------+---------------------------+------------+-----+-------+-------
+   1 | {1,2,3}    | foo   | 2018-01-01 00:00:00       | 2018-01-01 | t   |   0.5 |     1
+   1 | {19,20}    | eins  | 2018-01-01 00:00:00       | 2018-01-01 | t   |       |     1
+   2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00       | 2018-01-02 | f   |       |     2
+   3 | {7,8,9}    | baz   | 2018-01-03 00:00:00       | 2018-01-03 | t   |     1 |     3
+   3 | {21,22}    | zwei  | 2018-01-03 00:00:00       | 2018-01-03 | f   |       |     3
+   4 | {10,11,12} | uno   | 2018-01-04 00:00:10       | 2018-01-04 | f   |   1.5 |     4
+   5 | {13,14,15} | dos   | 2018-01-05 00:00:00.01    | 2018-01-05 | f   |       |     5
+   5 | {23,24}    | drei  | 2018-01-05 00:00:00       | 2018-01-05 | t   |       |     5
+   6 | {16,17,18} | tres  | 2018-01-06 00:00:00.00001 | 2018-01-06 | f   |     2 |     6
+   7 | {25,26}    | vier  | 2018-01-07 00:00:00       | 2018-01-07 | f   |       |     7
+   9 | {27,28}    | fünf  | 2018-01-09 00:00:00       | 2018-01-09 | t   |       |     9
+(11 rows)
+
+-- revert back
+--Testcase 161:
+ALTER FOREIGN TABLE example_sorted_caching DROP COLUMN eight;
 -- parallel execution
+--Testcase 99:
 SET parallel_setup_cost = 0;
+--Testcase 100:
 SET parallel_tuple_cost = 0.001;
+--Testcase 73:
 EXPLAIN (COSTS OFF) SELECT * FROM example_seq;
                  QUERY PLAN                 
 --------------------------------------------
@@ -529,7 +671,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY two;
                  example2.parquet: 1
 (9 rows)
 
+--Testcase 101:
 ALTER FOREIGN TABLE example_sorted OPTIONS (ADD files_in_order 'true');
+--Testcase 74:
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY one;
                   QUERY PLAN                   
 -----------------------------------------------
@@ -595,6 +739,7 @@ SELECT * FROM example_multisort ORDER BY one, five;
 
 -- maps
 \set var :PATH_FILENAME'/data/complex/example3.parquet'
+--Testcase 102:
 SET client_min_messages = DEBUG1;
 --Testcase 66:
 CREATE FOREIGN TABLE example3 (
@@ -613,14 +758,840 @@ SELECT * FROM example3;
 
 --Testcase 68:
 SELECT * FROM example3 WHERE three = 3;
-psql:sql/14.9/parquet_s3_fdw.sql:266: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:313: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  one | two | three 
 -----+-----+-------
 (0 rows)
 
 -- analyze
 ANALYZE example_sorted;
+--Testcase 103:
 SET client_min_messages = WARNING;
+-- ===================================================================
+-- test column options
+-- ===================================================================
+\set var :PATH_FILENAME'/data/column_name/ftcol.parquet'
+--Testcase 104:
+CREATE FOREIGN TABLE ftcol (
+    c1     INT8,
+    c2     INT8,
+    c3     TEXT)
+SERVER parquet_s3_srv
+OPTIONS (filename :'var', sorted 'c1');
+--Testcase 105:
+EXPLAIN (COSTS OFF) SELECT * FROM ftcol;
+              QUERY PLAN              
+--------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Parallel Foreign Scan on ftcol
+         Reader: Single File
+         Row groups: 1
+(5 rows)
+
+--Testcase 106:
+SELECT * FROM ftcol; -- c1 is blank
+ c1 | c2 | c3  
+----+----+-----
+    |  1 | foo
+    |  2 | bar
+    |  3 | baz
+(3 rows)
+
+-- test adding wrong column option name
+--Testcase 107:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (wrong_column_name 'C 1'); -- error
+psql:sql/14.9/parquet_s3_fdw.sql:340: ERROR:  parquet_s3_fdw: invalid option "wrong_column_name"
+-- test adding correct column_name option
+--Testcase 108:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (column_name 'C 1');
+--Testcase 109:
+\dS+ ftcol;
+                                          Foreign table "public.ftcol"
+ Column |  Type  | Collation | Nullable | Default |     FDW options     | Storage  | Stats target | Description 
+--------+--------+-----------+----------+---------+---------------------+----------+--------------+-------------
+ c1     | bigint |           |          |         | (column_name 'C 1') | plain    |              | 
+ c2     | bigint |           |          |         |                     | plain    |              | 
+ c3     | text   |           |          |         |                     | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/ftcol.parquet', sorted 'c1')
+
+-- test data is displayed after remapping
+--Testcase 110:
+EXPLAIN (COSTS OFF) SELECT * FROM ftcol;
+              QUERY PLAN              
+--------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Parallel Foreign Scan on ftcol
+         Reader: Single File
+         Row groups: 1
+(5 rows)
+
+--Testcase 111:
+SELECT * FROM ftcol; -- c1 is mapped to 'C 1' in the data file
+ c1 | c2 | c3  
+----+----+-----
+  1 |  1 | foo
+  2 |  2 | bar
+  3 |  3 | baz
+(3 rows)
+
+-- test multiple columns of foreign table map to the same column of parquet file
+--Testcase 162:
+ALTER FOREIGN TABLE ftcol ADD COLUMN c4 INT8 OPTIONS (column_name 'C 1');
+--Testcase 163:
+\dS+ ftcol;
+                                          Foreign table "public.ftcol"
+ Column |  Type  | Collation | Nullable | Default |     FDW options     | Storage  | Stats target | Description 
+--------+--------+-----------+----------+---------+---------------------+----------+--------------+-------------
+ c1     | bigint |           |          |         | (column_name 'C 1') | plain    |              | 
+ c2     | bigint |           |          |         |                     | plain    |              | 
+ c3     | text   |           |          |         |                     | extended |              | 
+ c4     | bigint |           |          |         | (column_name 'C 1') | plain    |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/ftcol.parquet', sorted 'c1')
+
+--Testcase 164:
+EXPLAIN (COSTS OFF) SELECT * FROM ftcol;
+              QUERY PLAN              
+--------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Parallel Foreign Scan on ftcol
+         Reader: Single File
+         Row groups: 1
+(5 rows)
+
+--Testcase 165:
+SELECT * FROM ftcol; -- c1 and c4 are both mapped to 'C 1' column in the data file
+ c1 | c2 | c3  | c4 
+----+----+-----+----
+  1 |  1 | foo |  1
+  2 |  2 | bar |  2
+  3 |  3 | baz |  3
+(3 rows)
+
+-- revert back
+--Testcase 166:
+ALTER FOREIGN TABLE ftcol DROP COLUMN c4;
+-- test sorted column
+--Testcase 112:
+INSERT INTO ftcol VALUES (0, 4, 'foo'); -- auto sorted without ORDER BY clause
+--Testcase 113:
+SELECT * FROM ftcol;
+ c1 | c2 | c3  
+----+----+-----
+  0 |  4 | foo
+  1 |  1 | foo
+  2 |  2 | bar
+  3 |  3 | baz
+(4 rows)
+
+-- test sorted column with ORDER BY
+--Testcase 114:
+EXPLAIN (COSTS OFF)
+SELECT * FROM ftcol ORDER BY c1;
+      QUERY PLAN       
+-----------------------
+ Foreign Scan on ftcol
+   Reader: Single File
+   Row groups: 1
+(3 rows)
+
+--Testcase 115:
+SELECT * FROM ftcol ORDER BY c1;
+ c1 | c2 | c3  
+----+----+-----
+  0 |  4 | foo
+  1 |  1 | foo
+  2 |  2 | bar
+  3 |  3 | baz
+(4 rows)
+
+-- test change column mapping, column name is case-sensitive
+--Testcase 116:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (drop column_name);
+--Testcase 117:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (column_name 'C2');
+--Testcase 118:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c2 OPTIONS (column_name 'c 1');
+--Testcase 119:
+SELECT * FROM ftcol; -- c1 and c2 are emtpy
+ c1 | c2 | c3  
+----+----+-----
+    |    | foo
+    |    | foo
+    |    | bar
+    |    | baz
+(4 rows)
+
+--Testcase 277:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (SET column_name 'c2');
+--Testcase 278:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c2 OPTIONS (SET column_name 'C 1');
+--Testcase 279:
+SELECT * FROM ftcol; -- c1 and c2 are swapped out
+ c1 | c2 | c3  
+----+----+-----
+  4 |  0 | foo
+  1 |  1 | foo
+  2 |  2 | bar
+  3 |  3 | baz
+(4 rows)
+
+-- test if column in the data file is not existed, empty result
+--Testcase 120:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c3 OPTIONS (column_name 'c10');
+--Testcase 121:
+SELECT * FROM ftcol; -- c3 column empty
+ c1 | c2 | c3 
+----+----+----
+  4 |  0 | 
+  1 |  1 | 
+  2 |  2 | 
+  3 |  3 | 
+(4 rows)
+
+--Testcase 122:
+INSERT INTO ftcol VALUES (5, 6, 'foobaz'); -- error
+psql:sql/14.9/parquet_s3_fdw.sql:402: ERROR:  parquet_s3_fdw: can not find modify target file
+--Testcase 123:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c3 OPTIONS (drop column_name);
+-- test scanning with mapping column in WHERE clause
+--Testcase 124:
+SELECT * FROM ftcol;
+ c1 | c2 | c3  
+----+----+-----
+  4 |  0 | foo
+  1 |  1 | foo
+  2 |  2 | bar
+  3 |  3 | baz
+(4 rows)
+
+--Testcase 125:
+SELECT * FROM ftcol WHERE c2 = 0;
+ c1 | c2 | c3  
+----+----+-----
+  4 |  0 | foo
+(1 row)
+
+-- test key column option
+--Testcase 126:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c2 OPTIONS (key 'no such value'); -- ERROR
+psql:sql/14.9/parquet_s3_fdw.sql:414: ERROR:  key requires a Boolean value
+--Testcase 127:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c2 OPTIONS (key 'true'); -- OK
+-- test deleting with mapping column in WHERE clause
+--Testcase 128:
+DELETE FROM ftcol WHERE c2 = 0;
+--Testcase 129:
+SELECT * FROM ftcol;
+ c1 | c2 | c3  
+----+----+-----
+  1 |  1 | foo
+  2 |  2 | bar
+  3 |  3 | baz
+(3 rows)
+
+-- test updating with mapping column in WHERE clause
+--Testcase 130:
+UPDATE ftcol SET c1 = 10 WHERE c2 = 1;
+--Testcase 131:
+SELECT * FROM ftcol;
+ c1 | c2 | c3  
+----+----+-----
+  2 |  2 | bar
+  3 |  3 | baz
+ 10 |  1 | foo
+(3 rows)
+
+-- reset table value for next test
+--Testcase 132:
+UPDATE ftcol SET c1 = 1 WHERE c2 = 1;
+-- test with row group filter
+--Testcase 133:
+SET client_min_messages = DEBUG1;
+--Testcase 134:
+SELECT * FROM example1;
+ one |    two     | three |           four            |    five    | six | seven 
+-----+------------+-------+---------------------------+------------+-----+-------
+   1 | {1,2,3}    | foo   | 2018-01-01 00:00:00       | 2018-01-01 | t   |   0.5
+   2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00       | 2018-01-02 | f   |      
+   3 | {7,8,9}    | baz   | 2018-01-03 00:00:00       | 2018-01-03 | t   |     1
+   4 | {10,11,12} | uno   | 2018-01-04 00:00:10       | 2018-01-04 | f   |   1.5
+   5 | {13,14,15} | dos   | 2018-01-05 00:00:00.01    | 2018-01-05 | f   |      
+   6 | {16,17,18} | tres  | 2018-01-06 00:00:00.00001 | 2018-01-06 | f   |     2
+(6 rows)
+
+--Testcase 135:
+ALTER FOREIGN TABLE example1 RENAME COLUMN one TO new_one;
+--Testcase 136:
+ALTER FOREIGN TABLE example1 OPTIONS (SET sorted 'new_one');
+--Testcase 137:
+SELECT * FROM example1;
+ new_one |    two     | three |           four            |    five    | six | seven 
+---------+------------+-------+---------------------------+------------+-----+-------
+         | {1,2,3}    | foo   | 2018-01-01 00:00:00       | 2018-01-01 | t   |   0.5
+         | {NULL,5,6} | bar   | 2018-01-02 00:00:00       | 2018-01-02 | f   |      
+         | {7,8,9}    | baz   | 2018-01-03 00:00:00       | 2018-01-03 | t   |     1
+         | {10,11,12} | uno   | 2018-01-04 00:00:10       | 2018-01-04 | f   |   1.5
+         | {13,14,15} | dos   | 2018-01-05 00:00:00.01    | 2018-01-05 | f   |      
+         | {16,17,18} | tres  | 2018-01-06 00:00:00.00001 | 2018-01-06 | f   |     2
+(6 rows)
+
+--Testcase 138:
+ALTER FOREIGN TABLE example1 ALTER COLUMN new_one OPTIONS (column_name 'one');
+--Testcase 139:
+SELECT * FROM example1;
+ new_one |    two     | three |           four            |    five    | six | seven 
+---------+------------+-------+---------------------------+------------+-----+-------
+       1 | {1,2,3}    | foo   | 2018-01-01 00:00:00       | 2018-01-01 | t   |   0.5
+       2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00       | 2018-01-02 | f   |      
+       3 | {7,8,9}    | baz   | 2018-01-03 00:00:00       | 2018-01-03 | t   |     1
+       4 | {10,11,12} | uno   | 2018-01-04 00:00:10       | 2018-01-04 | f   |   1.5
+       5 | {13,14,15} | dos   | 2018-01-05 00:00:00.01    | 2018-01-05 | f   |      
+       6 | {16,17,18} | tres  | 2018-01-06 00:00:00.00001 | 2018-01-06 | f   |     2
+(6 rows)
+
+--Testcase 140:
+SELECT * FROM example1 WHERE new_one < 1;
+psql:sql/14.9/parquet_s3_fdw.sql:451: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:451: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+ new_one | two | three | four | five | six | seven 
+---------+-----+-------+------+------+-----+-------
+(0 rows)
+
+--Testcase 141:
+SELECT * FROM example1 WHERE new_one <= 1;
+psql:sql/14.9/parquet_s3_fdw.sql:453: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+ new_one |   two   | three |        four         |    five    | six | seven 
+---------+---------+-------+---------------------+------------+-----+-------
+       1 | {1,2,3} | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
+(1 row)
+
+--Testcase 142:
+SELECT * FROM example1 WHERE new_one > 6;
+psql:sql/14.9/parquet_s3_fdw.sql:455: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:455: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+ new_one | two | three | four | five | six | seven 
+---------+-----+-------+------+------+-----+-------
+(0 rows)
+
+--Testcase 143:
+SELECT * FROM example1 WHERE new_one >= 6;
+psql:sql/14.9/parquet_s3_fdw.sql:457: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+ new_one |    two     | three |           four            |    five    | six | seven 
+---------+------------+-------+---------------------------+------------+-----+-------
+       6 | {16,17,18} | tres  | 2018-01-06 00:00:00.00001 | 2018-01-06 | f   |     2
+(1 row)
+
+--Testcase 144:
+SELECT * FROM example1 WHERE new_one = 2;
+psql:sql/14.9/parquet_s3_fdw.sql:459: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+ new_one |    two     | three |        four         |    five    | six | seven 
+---------+------------+-------+---------------------+------------+-----+-------
+       2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00 | 2018-01-02 | f   |      
+(1 row)
+
+--Testcase 145:
+SELECT * FROM example1 WHERE new_one = 7;
+psql:sql/14.9/parquet_s3_fdw.sql:461: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/14.9/parquet_s3_fdw.sql:461: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+ new_one | two | three | four | five | six | seven 
+---------+-----+-------+------+------+-----+-------
+(0 rows)
+
+-- Clean-up
+--Testcase 146:
+DROP FOREIGN TABLE ftcol;
+--Testcase 147:
+SET client_min_messages = WARNING;
+-- test ignoring dropped columns when inserting/deleting data
+--Testcase 148:
+ALTER FOREIGN TABLE example_multisort ALTER COLUMN one OPTIONS (key 'true');
+--Testcase 83:
+\dS+ example_multisort;
+                                           Foreign table "public.example_multisort"
+ Column |            Type             | Collation | Nullable | Default | FDW options  | Storage  | Stats target | Description 
+--------+-----------------------------+-----------+----------+---------+--------------+----------+--------------+-------------
+ one    | bigint                      |           |          |         | (key 'true') | plain    |              | 
+ two    | bigint[]                    |           |          |         |              | extended |              | 
+ three  | text                        |           |          |         |              | extended |              | 
+ four   | timestamp without time zone |           |          |         |              | plain    |              | 
+ five   | date                        |           |          |         |              | plain    |              | 
+ six    | boolean                     |           |          |         |              | plain    |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/simple/example1.parquet', sorted 'one five')
+
+--Testcase 84:
+DELETE FROM example_multisort; -- OK
+--Testcase 85:
+INSERT INTO example_multisort VALUES(7, '{19,20,21}' , 'seven' , '2018-01-07 00:00:00.00001' , '2018-01-07' , false); -- OK
+--Testcase 86:
+SELECT * FROM example_multisort;
+ one |    two     | three |           four            |    five    | six 
+-----+------------+-------+---------------------------+------------+-----
+   7 | {19,20,21} | seven | 2018-01-07 00:00:00.00001 | 2018-01-07 | f
+(1 row)
+
+--Testcase 149:
+ALTER FOREIGN TABLE example_multisort DROP COLUMN one;
+--Testcase 87:
+\dS+ example_multisort;
+                                          Foreign table "public.example_multisort"
+ Column |            Type             | Collation | Nullable | Default | FDW options | Storage  | Stats target | Description 
+--------+-----------------------------+-----------+----------+---------+-------------+----------+--------------+-------------
+ two    | bigint[]                    |           |          |         |             | extended |              | 
+ three  | text                        |           |          |         |             | extended |              | 
+ four   | timestamp without time zone |           |          |         |             | plain    |              | 
+ five   | date                        |           |          |         |             | plain    |              | 
+ six    | boolean                     |           |          |         |             | plain    |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/simple/example1.parquet', sorted 'one five')
+
+--Testcase 150:
+ALTER FOREIGN TABLE example_multisort ADD COLUMN one INT8 OPTIONS (key 'true');
+--Testcase 88:
+\dS+ example_multisort;
+                                           Foreign table "public.example_multisort"
+ Column |            Type             | Collation | Nullable | Default | FDW options  | Storage  | Stats target | Description 
+--------+-----------------------------+-----------+----------+---------+--------------+----------+--------------+-------------
+ two    | bigint[]                    |           |          |         |              | extended |              | 
+ three  | text                        |           |          |         |              | extended |              | 
+ four   | timestamp without time zone |           |          |         |              | plain    |              | 
+ five   | date                        |           |          |         |              | plain    |              | 
+ six    | boolean                     |           |          |         |              | plain    |              | 
+ one    | bigint                      |           |          |         | (key 'true') | plain    |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/simple/example1.parquet', sorted 'one five')
+
+--Testcase 89:
+DELETE FROM example_multisort; -- OK
+-- need to specify columns because the column order is changed
+--Testcase 90:
+INSERT INTO example_multisort(one, two, three, four, five, six) VALUES  (7, '{19,20,21}', 'seven' , '2018-01-07 00:00:00.00001' , '2018-01-07' , false); -- OK
+--Testcase 91:
+SELECT * FROM example_multisort;
+    two     | three |           four            |    five    | six | one 
+------------+-------+---------------------------+------------+-----+-----
+ {19,20,21} | seven | 2018-01-07 00:00:00.00001 | 2018-01-07 | f   |   7
+(1 row)
+
+-- ===================================================================
+-- test 'sorted' option
+-- ===================================================================
+\set var :PATH_FILENAME'/data/column_name/ftcol.parquet'
+--Testcase 75:
+CREATE FOREIGN TABLE ftcol (
+    "C 1" int,
+    c2 int,
+    c3 text
+) SERVER parquet_s3_srv
+OPTIONS (filename :'var', sorted '"C 1"');
+-- test sorted option with a column name has space character and is double quoted
+--Testcase 76:
+\dS+ ftcol;
+                                      Foreign table "public.ftcol"
+ Column |  Type   | Collation | Nullable | Default | FDW options | Storage  | Stats target | Description 
+--------+---------+-----------+----------+---------+-------------+----------+--------------+-------------
+ C 1    | integer |           |          |         |             | plain    |              | 
+ c2     | integer |           |          |         |             | plain    |              | 
+ c3     | text    |           |          |         |             | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/ftcol.parquet', sorted '"C 1"')
+
+--Testcase 77:
+SELECT * FROM ftcol;
+ C 1 | c2 | c3  
+-----+----+-----
+   1 |  1 | foo
+   2 |  2 | bar
+   3 |  3 | baz
+(3 rows)
+
+-- test sorted option with a list of column name separated by a space character
+-- if a column name has space character, it must be double quoted.
+--Testcase 151:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted '"C 1" c2');
+--Testcase 78:
+SELECT * FROM ftcol;
+ C 1 | c2 | c3  
+-----+----+-----
+   1 |  1 | foo
+   2 |  2 | bar
+   3 |  3 | baz
+(3 rows)
+
+-- test sorted option with a column name has space character but not double quoted
+--Testcase 152:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted 'C 1 c2');
+--Testcase 79:
+SELECT * FROM ftcol; -- error
+psql:sql/14.9/parquet_s3_fdw.sql:526: ERROR:  parquet_s3_fdw: invalid attribute name 'C'
+-- test sorted option with a column name has space character but missing a double quote
+--Testcase 153:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted '"C 1 c2');
+--Testcase 80:
+SELECT * FROM ftcol; -- error
+psql:sql/14.9/parquet_s3_fdw.sql:532: ERROR:  parquet_s3_fdw: mismatched quotes - "C 1 c2
+-- test sorted option with a list of column name but not separated by space character
+--Testcase 154:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted '"C 1", c2');
+--Testcase 81:
+SELECT * FROM ftcol; -- error
+psql:sql/14.9/parquet_s3_fdw.sql:538: ERROR:  parquet_s3_fdw: invalid syntax - "C 1", c2
+-- reset sorted option to the default value
+--Testcase 155:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted '"C 1"');
+--Testcase 82:
+SELECT * FROM ftcol;
+ C 1 | c2 | c3  
+-----+----+-----
+   1 |  1 | foo
+   2 |  2 | bar
+   3 |  3 | baz
+(3 rows)
+
+-- Clean-up
+--Testcase 156:
+DROP FOREIGN TABLE ftcol;
+-- Test analyze empty table
+--Testcase 211:
+DROP FOREIGN TABLE example1;
+\set var :PATH_FILENAME'/data/simple/example1.parquet'
+--Testcase 212:
+CREATE FOREIGN TABLE example1 (
+    one     INT8 OPTIONS (key 'true'),
+    two     INT8[],
+    three   TEXT,
+    four    TIMESTAMP,
+    five    DATE,
+    six     BOOL,
+    seven   FLOAT8)
+SERVER parquet_s3_srv
+OPTIONS (filename :'var', sorted 'one');
+--Testcase 213:
+SET ROLE regress_parquet_s3_fdw;
+--Testcase 214:
+DELETE FROM example1;
+--Testcase 215:
+SELECT * FROM example1;
+ one | two | three | four | five | six | seven 
+-----+-----+-------+------+------+-----+-------
+(0 rows)
+
+--Testcase 216:
+ANALYZE example1;
+--Testcase 167:
+RESET parallel_setup_cost;
+--Testcase 168:
+RESET parallel_tuple_cost;
+-- ===================================================================
+-- test case-sensitive column name
+-- ===================================================================
+\set var :PATH_FILENAME'/data/column_name/case-sensitive.parquet'
+--Testcase 169:
+CREATE FOREIGN TABLE case_sensitive (
+    "UPPER" text,
+    lower text,
+    "MiXiNg" text
+) SERVER parquet_s3_srv
+OPTIONS (filename :'var');
+--Testcase 170:
+\dS+ case_sensitive;
+                                Foreign table "public.case_sensitive"
+ Column | Type | Collation | Nullable | Default | FDW options | Storage  | Stats target | Description 
+--------+------+-----------+----------+---------+-------------+----------+--------------+-------------
+ UPPER  | text |           |          |         |             | extended |              | 
+ lower  | text |           |          |         |             | extended |              | 
+ MiXiNg | text |           |          |         |             | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet')
+
+-- Select all data from table, expect correct data for all columns.
+--Testcase 171:
+SELECT * FROM case_sensitive;
+ UPPER | lower | MiXiNg 
+-------+-------+--------
+ UPPER | lower | MixinG
+ CASE  | case  | CaSe
+ DATA  | data  | dAtA
+(3 rows)
+
+-- Add some new case-sensitive columns which does not exist in parquet file,
+-- expect NULL data for that column.
+--Testcase 172:
+ALTER FOREIGN TABLE case_sensitive ADD COLUMN upper text, ADD COLUMN "LOWER" text, ADD COLUMN "mIxInG" text;
+--Testcase 173:
+\dS+ case_sensitive;
+                                Foreign table "public.case_sensitive"
+ Column | Type | Collation | Nullable | Default | FDW options | Storage  | Stats target | Description 
+--------+------+-----------+----------+---------+-------------+----------+--------------+-------------
+ UPPER  | text |           |          |         |             | extended |              | 
+ lower  | text |           |          |         |             | extended |              | 
+ MiXiNg | text |           |          |         |             | extended |              | 
+ upper  | text |           |          |         |             | extended |              | 
+ LOWER  | text |           |          |         |             | extended |              | 
+ mIxInG | text |           |          |         |             | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet')
+
+--Testcase 174:
+SELECT * FROM case_sensitive;
+ UPPER | lower | MiXiNg | upper | LOWER | mIxInG 
+-------+-------+--------+-------+-------+--------
+ UPPER | lower | MixinG |       |       | 
+ CASE  | case  | CaSe   |       |       | 
+ DATA  | data  | dAtA   |       |       | 
+(3 rows)
+
+-- Test column name mapping feature with case-sensitive columns.
+-- 2 columns "UPPER", "upper" of the foreign table map to column "UPPER" of parquet file.
+-- 2 columns "lower", "LOWER" of the foreign table map to column "LOWER" of parquet file.
+-- 2 columns "MiXiNg", "mIxInG" of the foreign table map to column "MiXiNg" of parquet file.
+--Testcase 175:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (ADD column_name 'UPPER');
+--Testcase 176:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "LOWER" OPTIONS (ADD column_name 'lower');
+--Testcase 177:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "mIxInG" OPTIONS (ADD column_name 'MiXiNg');
+--Testcase 178:
+\dS+ case_sensitive;
+                                      Foreign table "public.case_sensitive"
+ Column | Type | Collation | Nullable | Default |      FDW options       | Storage  | Stats target | Description 
+--------+------+-----------+----------+---------+------------------------+----------+--------------+-------------
+ UPPER  | text |           |          |         |                        | extended |              | 
+ lower  | text |           |          |         |                        | extended |              | 
+ MiXiNg | text |           |          |         |                        | extended |              | 
+ upper  | text |           |          |         | (column_name 'UPPER')  | extended |              | 
+ LOWER  | text |           |          |         | (column_name 'lower')  | extended |              | 
+ mIxInG | text |           |          |         | (column_name 'MiXiNg') | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet')
+
+--Testcase 179:
+SELECT * FROM case_sensitive;
+ UPPER | lower | MiXiNg | upper | LOWER | mIxInG 
+-------+-------+--------+-------+-------+--------
+ UPPER | lower | MixinG | UPPER | lower | MixinG
+ CASE  | case  | CaSe   | CASE  | case  | CaSe
+ DATA  | data  | dAtA   | DATA  | data  | dAtA
+(3 rows)
+
+-- Test sorted option with case-sensitive columns
+--Testcase 180:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (DROP column_name);
+--Testcase 181:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "LOWER" OPTIONS (DROP column_name);
+--Testcase 182:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "mIxInG" OPTIONS (DROP column_name);
+-- Single sorting key
+--Testcase 183:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (ADD sorted '"UPPER"');
+--Testcase 184:
+\dS+ case_sensitive;
+                                Foreign table "public.case_sensitive"
+ Column | Type | Collation | Nullable | Default | FDW options | Storage  | Stats target | Description 
+--------+------+-----------+----------+---------+-------------+----------+--------------+-------------
+ UPPER  | text |           |          |         |             | extended |              | 
+ lower  | text |           |          |         |             | extended |              | 
+ MiXiNg | text |           |          |         |             | extended |              | 
+ upper  | text |           |          |         |             | extended |              | 
+ LOWER  | text |           |          |         |             | extended |              | 
+ mIxInG | text |           |          |         |             | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet', sorted '"UPPER"')
+
+--Testcase 185:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "UPPER";
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Foreign Scan on public.case_sensitive  (cost=0.00..0.03 rows=3 width=192)
+   Output: "UPPER", lower, "MiXiNg", upper, "LOWER", "mIxInG"
+   Reader: Single File
+   Row groups: 1
+(4 rows)
+
+--Testcase 186:
+SELECT * FROM case_sensitive ORDER BY "UPPER";
+ UPPER | lower | MiXiNg | upper | LOWER | mIxInG 
+-------+-------+--------+-------+-------+--------
+ UPPER | lower | MixinG |       |       | 
+ CASE  | case  | CaSe   |       |       | 
+ DATA  | data  | dAtA   |       |       | 
+(3 rows)
+
+-- Try to ORDER BY non-sorted column
+--Testcase 187:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "MiXiNg";
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Sort  (cost=0.05..0.06 rows=3 width=192)
+   Output: "UPPER", lower, "MiXiNg", upper, "LOWER", "mIxInG"
+   Sort Key: case_sensitive."MiXiNg"
+   ->  Foreign Scan on public.case_sensitive  (cost=0.00..0.03 rows=3 width=192)
+         Output: "UPPER", lower, "MiXiNg", upper, "LOWER", "mIxInG"
+         Reader: Single File
+         Row groups: 1
+(7 rows)
+
+--Testcase 188:
+SELECT * FROM case_sensitive ORDER BY "MiXiNg";
+ UPPER | lower | MiXiNg | upper | LOWER | mIxInG 
+-------+-------+--------+-------+-------+--------
+ CASE  | case  | CaSe   |       |       | 
+ DATA  | data  | dAtA   |       |       | 
+ UPPER | lower | MixinG |       |       | 
+(3 rows)
+
+-- Multiple sorting key
+--Testcase 189:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted '"UPPER" lower "MiXiNg"');
+--Testcase 190:
+\dS+ case_sensitive;
+                                Foreign table "public.case_sensitive"
+ Column | Type | Collation | Nullable | Default | FDW options | Storage  | Stats target | Description 
+--------+------+-----------+----------+---------+-------------+----------+--------------+-------------
+ UPPER  | text |           |          |         |             | extended |              | 
+ lower  | text |           |          |         |             | extended |              | 
+ MiXiNg | text |           |          |         |             | extended |              | 
+ upper  | text |           |          |         |             | extended |              | 
+ LOWER  | text |           |          |         |             | extended |              | 
+ mIxInG | text |           |          |         |             | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet', sorted '"UPPER" lower "MiXiNg"')
+
+--Testcase 191:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "UPPER", lower, "MiXiNg";
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Foreign Scan on public.case_sensitive  (cost=0.00..0.03 rows=3 width=192)
+   Output: "UPPER", lower, "MiXiNg", upper, "LOWER", "mIxInG"
+   Reader: Single File
+   Row groups: 1
+(4 rows)
+
+--Testcase 192:
+SELECT * FROM case_sensitive ORDER BY "UPPER", lower, "MiXiNg";
+ UPPER | lower | MiXiNg | upper | LOWER | mIxInG 
+-------+-------+--------+-------+-------+--------
+ UPPER | lower | MixinG |       |       | 
+ CASE  | case  | CaSe   |       |       | 
+ DATA  | data  | dAtA   |       |       | 
+(3 rows)
+
+-- Combine column name mapping feature with sorted options for case-sensitive columns
+--Testcase 193:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (ADD column_name 'UPPER');
+--Testcase 194:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "LOWER" OPTIONS (ADD column_name 'lower');
+--Testcase 195:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "mIxInG" OPTIONS (ADD column_name 'MiXiNg');
+-- Single sorting key
+--Testcase 196:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted 'upper');
+--Testcase 197:
+\dS+ case_sensitive;
+                                      Foreign table "public.case_sensitive"
+ Column | Type | Collation | Nullable | Default |      FDW options       | Storage  | Stats target | Description 
+--------+------+-----------+----------+---------+------------------------+----------+--------------+-------------
+ UPPER  | text |           |          |         |                        | extended |              | 
+ lower  | text |           |          |         |                        | extended |              | 
+ MiXiNg | text |           |          |         |                        | extended |              | 
+ upper  | text |           |          |         | (column_name 'UPPER')  | extended |              | 
+ LOWER  | text |           |          |         | (column_name 'lower')  | extended |              | 
+ mIxInG | text |           |          |         | (column_name 'MiXiNg') | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet', sorted 'upper')
+
+--Testcase 198:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY upper;
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Foreign Scan on public.case_sensitive  (cost=0.00..0.03 rows=3 width=192)
+   Output: "UPPER", lower, "MiXiNg", upper, "LOWER", "mIxInG"
+   Reader: Single File
+   Row groups: 1
+(4 rows)
+
+--Testcase 199:
+SELECT * FROM case_sensitive ORDER BY upper;
+ UPPER | lower | MiXiNg | upper | LOWER | mIxInG 
+-------+-------+--------+-------+-------+--------
+ UPPER | lower | MixinG | UPPER | lower | MixinG
+ CASE  | case  | CaSe   | CASE  | case  | CaSe
+ DATA  | data  | dAtA   | DATA  | data  | dAtA
+(3 rows)
+
+-- Try to ORDER BY non-sorted column
+--Testcase 200:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "mIxInG";
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Sort  (cost=0.05..0.06 rows=3 width=192)
+   Output: "UPPER", lower, "MiXiNg", upper, "LOWER", "mIxInG"
+   Sort Key: case_sensitive."mIxInG"
+   ->  Foreign Scan on public.case_sensitive  (cost=0.00..0.03 rows=3 width=192)
+         Output: "UPPER", lower, "MiXiNg", upper, "LOWER", "mIxInG"
+         Reader: Single File
+         Row groups: 1
+(7 rows)
+
+--Testcase 201:
+SELECT * FROM case_sensitive ORDER BY "mIxInG";
+ UPPER | lower | MiXiNg | upper | LOWER | mIxInG 
+-------+-------+--------+-------+-------+--------
+ CASE  | case  | CaSe   | CASE  | case  | CaSe
+ DATA  | data  | dAtA   | DATA  | data  | dAtA
+ UPPER | lower | MixinG | UPPER | lower | MixinG
+(3 rows)
+
+-- Multiple sorting key
+--Testcase 202:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted 'upper "LOWER" "mIxInG"');
+--Testcase 203:
+\dS+ case_sensitive;
+                                      Foreign table "public.case_sensitive"
+ Column | Type | Collation | Nullable | Default |      FDW options       | Storage  | Stats target | Description 
+--------+------+-----------+----------+---------+------------------------+----------+--------------+-------------
+ UPPER  | text |           |          |         |                        | extended |              | 
+ lower  | text |           |          |         |                        | extended |              | 
+ MiXiNg | text |           |          |         |                        | extended |              | 
+ upper  | text |           |          |         | (column_name 'UPPER')  | extended |              | 
+ LOWER  | text |           |          |         | (column_name 'lower')  | extended |              | 
+ mIxInG | text |           |          |         | (column_name 'MiXiNg') | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet', sorted 'upper "LOWER" "mIxInG"')
+
+--Testcase 204:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY upper, "LOWER", "mIxInG";
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Foreign Scan on public.case_sensitive  (cost=0.00..0.03 rows=3 width=192)
+   Output: "UPPER", lower, "MiXiNg", upper, "LOWER", "mIxInG"
+   Reader: Single File
+   Row groups: 1
+(4 rows)
+
+--Testcase 205:
+SELECT * FROM case_sensitive ORDER BY upper, "LOWER", "mIxInG";
+ UPPER | lower | MiXiNg | upper | LOWER | mIxInG 
+-------+-------+--------+-------+-------+--------
+ UPPER | lower | MixinG | UPPER | lower | MixinG
+ CASE  | case  | CaSe   | CASE  | case  | CaSe
+ DATA  | data  | dAtA   | DATA  | data  | dAtA
+(3 rows)
+
+-- Clean-up
+--Testcase 206:
+DROP FOREIGN TABLE case_sensitive;
 --get version
 --Testcase 69:
 \df parquet_s3*
@@ -639,14 +1610,14 @@ SET client_min_messages = WARNING;
 SELECT * FROM public.parquet_s3_fdw_version();
  parquet_s3_fdw_version 
 ------------------------
-                  10100
+                  10101
 (1 row)
 
 --Testcase 71:
 SELECT parquet_s3_fdw_version();
  parquet_s3_fdw_version 
 ------------------------
-                  10100
+                  10101
 (1 row)
 
 --Testcase 72:

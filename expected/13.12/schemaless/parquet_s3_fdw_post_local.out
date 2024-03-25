@@ -31,18 +31,18 @@ CREATE SCHEMA "S 1";
 \set var '\"':PATH_FILENAME'\/ported_postgres\"'
 IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO "S 1" OPTIONS (sorted 'c1', schemaless 'true');
 -- -- Disable autovacuum for these tables to avoid unexpected effects of that
--- ALTER TABLE "S 1"."T1" SET (autovacuum_enabled = 'false');
+-- ALTER TABLE "S 1"."T1_schemaless" SET (autovacuum_enabled = 'false');
 -- ALTER TABLE "S 1"."T2" SET (autovacuum_enabled = 'false');
 -- ALTER TABLE "S 1"."T3" SET (autovacuum_enabled = 'false');
 -- ALTER TABLE "S 1"."T4" SET (autovacuum_enabled = 'false');
--- ANALYZE "S 1"."T1";
+-- ANALYZE "S 1"."T1_schemaless";
 -- ANALYZE "S 1"."T2";
 -- ANALYZE "S 1"."T3";
 -- ANALYZE "S 1"."T4";
 -- ===================================================================
 -- create foreign tables
 -- ===================================================================
-\set var :PATH_FILENAME'/ported_postgres/ft1.parquet'
+\set var :PATH_FILENAME'/ported_postgres/ft1_schemaless.parquet'
 --Testcase 10:
 CREATE FOREIGN TABLE ft1 (
 	c0 int,
@@ -51,7 +51,7 @@ CREATE FOREIGN TABLE ft1 (
 OPTIONS (filename :'var', key_columns 'c1', sorted 'c1', schemaless 'true');
 --Testcase 446:
 ALTER FOREIGN TABLE ft1 DROP COLUMN c0;
-\set var :PATH_FILENAME'/ported_postgres/ft1.parquet'
+\set var :PATH_FILENAME'/ported_postgres/ft1_schemaless.parquet'
 --Testcase 11:
 CREATE FOREIGN TABLE ft2 (
   v jsonb,
@@ -434,7 +434,7 @@ SET enable_nestloop TO false;
 -- inner join; expressions in the clauses appear in the equivalence class list
 --Testcase 39:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 JOIN "S 1"."T1" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 JOIN "S 1"."T1_schemaless" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
                                          QUERY PLAN                                          
 ---------------------------------------------------------------------------------------------
  Limit
@@ -452,14 +452,14 @@ EXPLAIN (VERBOSE, COSTS OFF)
          ->  Sort
                Output: t2.v, (((t2.v ->> 'c1'::text))::bigint)
                Sort Key: (((t2.v ->> 'c1'::text))::bigint)
-               ->  Foreign Scan on "S 1"."T1" t2
+               ->  Foreign Scan on "S 1"."T1_schemaless" t2
                      Output: t2.v, ((t2.v ->> 'c1'::text))::bigint
                      Reader: Single File
                      Row groups: 1
 (19 rows)
 
 --Testcase 40:
-SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 JOIN "S 1"."T1" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 JOIN "S 1"."T1_schemaless" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
  c1  | c1  
 -----+-----
  101 | 101
@@ -478,7 +478,7 @@ SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 JOIN "S 
 -- list but no output change as compared to the previous query
 --Testcase 41:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 LEFT JOIN "S 1"."T1_schemaless" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
                                          QUERY PLAN                                          
 ---------------------------------------------------------------------------------------------
  Limit
@@ -496,14 +496,14 @@ EXPLAIN (VERBOSE, COSTS OFF)
          ->  Sort
                Output: t2.v, (((t2.v ->> 'c1'::text))::bigint)
                Sort Key: (((t2.v ->> 'c1'::text))::bigint)
-               ->  Foreign Scan on "S 1"."T1" t2
+               ->  Foreign Scan on "S 1"."T1_schemaless" t2
                      Output: t2.v, ((t2.v ->> 'c1'::text))::bigint
                      Reader: Single File
                      Row groups: 1
 (19 rows)
 
 --Testcase 42:
-SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 LEFT JOIN "S 1"."T1_schemaless" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
  c1  | c1  
 -----+-----
  101 | 101
@@ -522,7 +522,7 @@ SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 LEFT JOI
 -- foreign join so that the local table can be joined using merge join strategy.
 --Testcase 43:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 left join ft1 t2 join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
                                                QUERY PLAN                                                
 ---------------------------------------------------------------------------------------------------------
  Limit
@@ -533,7 +533,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
          ->  Sort
                Output: t1.v, (((t1.v ->> 'c1'::text))::bigint)
                Sort Key: (((t1.v ->> 'c1'::text))::bigint)
-               ->  Foreign Scan on "S 1"."T1" t1
+               ->  Foreign Scan on "S 1"."T1_schemaless" t1
                      Output: t1.v, ((t1.v ->> 'c1'::text))::bigint
                      Reader: Single File
                      Row groups: 1
@@ -559,7 +559,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
 (31 rows)
 
 --Testcase 44:
-SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 left join ft1 t2 join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
  c1  
 -----
  101
@@ -579,7 +579,7 @@ SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3
 -- included in join restrictions.
 --Testcase 45:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 left join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
                                                      QUERY PLAN                                                      
 ---------------------------------------------------------------------------------------------------------------------
  Limit
@@ -590,7 +590,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
          ->  Sort
                Output: t1.v, (((t1.v ->> 'c1'::text))::bigint)
                Sort Key: (((t1.v ->> 'c1'::text))::bigint)
-               ->  Foreign Scan on "S 1"."T1" t1
+               ->  Foreign Scan on "S 1"."T1_schemaless" t1
                      Output: t1.v, ((t1.v ->> 'c1'::text))::bigint
                      Reader: Single File
                      Row groups: 1
@@ -616,7 +616,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
 (31 rows)
 
 --Testcase 46:
-SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 left join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
  c1  | c1  | c1  
 -----+-----+-----
  101 | 101 | 101
@@ -634,7 +634,7 @@ SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8
 -- Test similar to above with all full outer joins
 --Testcase 47:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 full join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
                                                     QUERY PLAN                                                     
 -------------------------------------------------------------------------------------------------------------------
  Limit
@@ -645,7 +645,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
          ->  Sort
                Output: t1.v, (((t1.v ->> 'c1'::text))::bigint)
                Sort Key: (((t1.v ->> 'c1'::text))::bigint)
-               ->  Foreign Scan on "S 1"."T1" t1
+               ->  Foreign Scan on "S 1"."T1_schemaless" t1
                      Output: t1.v, ((t1.v ->> 'c1'::text))::bigint
                      Reader: Single File
                      Row groups: 1
@@ -672,7 +672,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
 (32 rows)
 
 --Testcase 48:
-SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 full join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
  c1  | c1  | c1  
 -----+-----+-----
  101 | 101 | 101
@@ -818,8 +818,9 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 t1 WHERE v->>'c6' = E'foo''s\\bar
  Foreign Scan on public.ft1 t1
    Output: v
    Filter: ((t1.v ->> 'c6'::text) = 'foo''s\bar'::text)
-   Reader: Trivial
-(4 rows)
+   Reader: Single File
+   Row groups: 1
+(5 rows)
 
 --Testcase 61:
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 t1 WHERE v->>'c8' = 'foo';  -- can't be sent to remote
@@ -835,7 +836,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 t1 WHERE v->>'c8' = 'foo';  -- ca
 -- parameterized remote path for foreign table
 --Testcase 62:
 EXPLAIN (VERBOSE, COSTS OFF)
-  SELECT * FROM "S 1"."T1" a, ft2 b WHERE (a.v->>'c1')::int8 = 47 AND (b.v->>'c1')::int8 = (a.v->>'c2')::int8;
+  SELECT * FROM "S 1"."T1_schemaless" a, ft2 b WHERE (a.v->>'c1')::int8 = 47 AND (b.v->>'c1')::int8 = (a.v->>'c2')::int8;
                                    QUERY PLAN                                   
 --------------------------------------------------------------------------------
  Hash Join
@@ -847,7 +848,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
          Row groups: 1
    ->  Hash
          Output: a.v
-         ->  Foreign Scan on "S 1"."T1" a
+         ->  Foreign Scan on "S 1"."T1_schemaless" a
                Output: a.v
                Filter: (((a.v ->> 'c1'::text))::bigint = 47)
                Reader: Single File
@@ -855,7 +856,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
 (14 rows)
 
 --Testcase 63:
-SELECT * FROM ft2 a, ft2 b WHERE (a.v->>'c1')::int8 = 47 AND (b.v->>'c1')::int8 = (a.v->>'c2')::int8;
+SELECT * FROM "S 1"."T1_schemaless" a, ft2 b WHERE (a.v->>'c1')::int8 = 47 AND(b.v->>'c1')::int8 = (a.v->>'c2')::int8;
                                                     v                                                    |                                                   v                                                    
 ---------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------
  {"c1": 47, "c2": 7, "c3": "00047", "c5": "Tue Feb 17 00:00:00 1970", "c6": "7", "c7": "7", "c8": "foo"} | {"c1": 7, "c2": 7, "c3": "00007", "c5": "Thu Jan 08 00:00:00 1970", "c6": "7", "c7": "7", "c8": "foo"}
@@ -2996,17 +2997,23 @@ SELECT t1c1, avg(t1c1 + t2c1) FROM (SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c
 -- join with lateral reference
 --Testcase 163:
 EXPLAIN (VERBOSE, COSTS OFF)
-SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM ft1 t2, ft2 t3 WHERE (t2.v->>'c1')::int8 = (t3.v->>'c1')::int8 AND (t2.v->>'c2')::int = (t1.v->>'c2')::int) q ORDER BY (t1.v->>'c1')::int8 OFFSET 10 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1, LATERAL (SELECT DISTINCT (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM ft1 t2, ft2 t3 WHERE (t2.v->>'c1')::int8 = (t3.v->>'c1')::int8 AND (t2.v->>'c2')::int = (t1.v->>'c2')::int) q ORDER BY (t1.v->>'c1')::int8 OFFSET 10 LIMIT 10;
                                                   QUERY PLAN                                                   
 ---------------------------------------------------------------------------------------------------------------
  Limit
    Output: (((t1.v ->> 'c1'::text))::bigint)
    ->  Nested Loop
          Output: ((t1.v ->> 'c1'::text))::bigint
-         ->  Foreign Scan on "S 1"."T1" t1
+         ->  Gather Merge
                Output: t1.v
-               Reader: Single File
-               Row groups: 1
+               Workers Planned: 2
+               ->  Sort
+                     Output: t1.v, (((t1.v ->> 'c1'::text))::bigint)
+                     Sort Key: (((t1.v ->> 'c1'::text))::bigint)
+                     ->  Parallel Foreign Scan on "S 1"."T1_schemaless" t1
+                           Output: t1.v, ((t1.v ->> 'c1'::text))::bigint
+                           Reader: Single File
+                           Row groups: 1
          ->  HashAggregate
                Output: (((t2.v ->> 'c1'::text))::bigint), (((t3.v ->> 'c1'::text))::bigint)
                Group Key: ((t2.v ->> 'c1'::text))::bigint, ((t3.v ->> 'c1'::text))::bigint
@@ -3024,10 +3031,10 @@ SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT (t
                                  Filter: (((t2.v ->> 'c2'::text))::integer = ((t1.v ->> 'c2'::text))::integer)
                                  Reader: Single File
                                  Row groups: 1
-(25 rows)
+(31 rows)
 
 --Testcase 164:
-SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM ft1 t2, ft2 t3 WHERE (t2.v->>'c1')::int8 = (t3.v->>'c1')::int8 AND (t2.v->>'c2')::int = (t1.v->>'c2')::int) q ORDER BY (t1.v->>'c1')::int8 OFFSET 10 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1, LATERAL (SELECT DISTINCT (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM ft1 t2, ft2 t3 WHERE (t2.v->>'c1')::int8 = (t3.v->>'c1')::int8 AND (t2.v->>'c2')::int = (t1.v->>'c2')::int) q ORDER BY (t1.v->>'c1')::int8 OFFSET 10 LIMIT 10;
  c1 
 ----
   1
@@ -3041,6 +3048,38 @@ SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT (t
   1
   1
 (10 rows)
+
+-- join with pseudoconstant quals, not pushed down.
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT (t1.v->>'c1')::int8, (t2.v->>'c1')::int8 FROM ft1 t1 JOIN ft2 t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8 AND CURRENT_USER = SESSION_USER) ORDER BY (t1.v->>'c3')::text, (t1.v->>'c1')::int8 OFFSET 100 LIMIT 10;
+                                                  QUERY PLAN                                                   
+---------------------------------------------------------------------------------------------------------------
+ Limit
+   Output: (((t1.v ->> 'c1'::text))::bigint), (((t2.v ->> 'c1'::text))::bigint), ((t1.v ->> 'c3'::text))
+   ->  Sort
+         Output: (((t1.v ->> 'c1'::text))::bigint), (((t2.v ->> 'c1'::text))::bigint), ((t1.v ->> 'c3'::text))
+         Sort Key: ((t1.v ->> 'c3'::text)), (((t1.v ->> 'c1'::text))::bigint)
+         ->  Result
+               Output: ((t1.v ->> 'c1'::text))::bigint, ((t2.v ->> 'c1'::text))::bigint, (t1.v ->> 'c3'::text)
+               One-Time Filter: (CURRENT_USER = SESSION_USER)
+               ->  Merge Join
+                     Output: t1.v, t2.v
+                     Merge Cond: ((((t1.v ->> 'c1'::text))::bigint) = (((t2.v ->> 'c1'::text))::bigint))
+                     ->  Sort
+                           Output: t1.v, (((t1.v ->> 'c1'::text))::bigint)
+                           Sort Key: (((t1.v ->> 'c1'::text))::bigint)
+                           ->  Foreign Scan on public.ft1 t1
+                                 Output: t1.v, ((t1.v ->> 'c1'::text))::bigint
+                                 Reader: Single File
+                                 Row groups: 1
+                     ->  Sort
+                           Output: t2.v, (((t2.v ->> 'c1'::text))::bigint)
+                           Sort Key: (((t2.v ->> 'c1'::text))::bigint)
+                           ->  Foreign Scan on public.ft2 t2
+                                 Output: t2.v, ((t2.v ->> 'c1'::text))::bigint
+                                 Reader: Single File
+                                 Row groups: 1
+(25 rows)
 
 -- non-Var items in targetlist of the nullable rel of a join preventing
 -- push-down in some cases
@@ -4678,7 +4717,7 @@ select sum((v->>'c2')::int) * (random() <= 1)::int as sum from ft1 order by 1;
 set enable_hashagg to false;
 --Testcase 272:
 explain (verbose, costs off)
-select (v->>'c2')::int as c2, sum from "S 1"."T1" t1, lateral (select sum((t2.v->>'c1')::int8 + (t1.v->>'c1')::int8) sum from ft2 t2 group by (t2.v->>'c1')::int8) qry where (t1.v->>'c2')::int * 2 = qry.sum and (t1.v->>'c2')::int < 3 and (t1.v->>'c1')::int8 < 100 order by 1;
+select (v->>'c2')::int as c2, sum from "S 1"."T1_schemaless" t1, lateral (select sum((t2.v->>'c1')::int8 + (t1.v->>'c1')::int8) sum from ft2 t2 group by (t2.v->>'c1')::int8) qry where (t1.v->>'c2')::int * 2 = qry.sum and (t1.v->>'c2')::int < 3 and (t1.v->>'c1')::int8 < 100 order by 1;
                                                                 QUERY PLAN                                                                 
 -------------------------------------------------------------------------------------------------------------------------------------------
  Sort
@@ -4686,7 +4725,7 @@ select (v->>'c2')::int as c2, sum from "S 1"."T1" t1, lateral (select sum((t2.v-
    Sort Key: (((t1.v ->> 'c2'::text))::integer)
    ->  Nested Loop
          Output: ((t1.v ->> 'c2'::text))::integer, qry.sum
-         ->  Foreign Scan on "S 1"."T1" t1
+         ->  Foreign Scan on "S 1"."T1_schemaless" t1
                Output: t1.v
                Filter: ((((t1.v ->> 'c2'::text))::integer < 3) AND (((t1.v ->> 'c1'::text))::bigint < 100))
                Reader: Single File
@@ -4707,7 +4746,7 @@ select (v->>'c2')::int as c2, sum from "S 1"."T1" t1, lateral (select sum((t2.v-
 (23 rows)
 
 --Testcase 273:
-select (v->>'c2')::int as c2, sum from "S 1"."T1" t1, lateral (select sum((t2.v->>'c1')::int8 + (t1.v->>'c1')::int8) sum from ft2 t2 group by (t2.v->>'c1')::int8) qry where (t1.v->>'c2')::int * 2 = qry.sum and (t1.v->>'c2')::int < 3 and (t1.v->>'c1')::int8 < 100 order by 1;
+select (v->>'c2')::int as c2, sum from "S 1"."T1_schemaless" t1, lateral (select sum((t2.v->>'c1')::int8 + (t1.v->>'c1')::int8) sum from ft2 t2 group by (t2.v->>'c1')::int8) qry where (t1.v->>'c2')::int * 2 = qry.sum and (t1.v->>'c2')::int < 3 and (t1.v->>'c1')::int8 < 100 order by 1;
  c2 | sum 
 ----+-----
   1 |   2
@@ -4721,7 +4760,7 @@ reset enable_hashagg;
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT (ref_0.v->>'c2')::int8 AS c2, subq_1.*
 FROM
-    "S 1"."T1" AS ref_0,
+    "S 1"."T1_schemaless" AS ref_0,
     LATERAL (
         SELECT (ref_0.v->>'c1')::int8 c1, subq_0.*
         FROM (SELECT (ref_0.v->>'c2')::int as c2, (ref_1.v->>'c3') as c3
@@ -4730,35 +4769,38 @@ FROM
     ) AS subq_1
 WHERE (ref_0.v->>'c1')::int8 < 10 AND subq_1.c3 = '00001'
 ORDER BY (ref_0.v->>'c1')::int8;
-                                                                                      QUERY PLAN                                                                                       
----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Nested Loop
-   Output: ((ref_0.v ->> 'c2'::text))::bigint, ((ref_0.v ->> 'c1'::text))::bigint, (((ref_0.v ->> 'c2'::text))::integer), (ref_1.v ->> 'c3'::text), ((ref_0.v ->> 'c1'::text))::bigint
+                                                                                          QUERY PLAN                                                                                           
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort
+   Output: (((ref_0.v ->> 'c2'::text))::bigint), (((ref_0.v ->> 'c1'::text))::bigint), (((ref_0.v ->> 'c2'::text))::integer), ((ref_1.v ->> 'c3'::text)), (((ref_0.v ->> 'c1'::text))::bigint)
+   Sort Key: (((ref_0.v ->> 'c1'::text))::bigint)
    ->  Nested Loop
-         Output: ref_0.v, ref_1.v, (((ref_0.v ->> 'c2'::text))::integer)
-         ->  Foreign Scan on "S 1"."T1" ref_0
-               Output: ref_0.v
-               Filter: (((ref_0.v ->> 'c1'::text))::bigint < 10)
-               Reader: Single File
-               Row groups: 1
-         ->  Foreign Scan on public.ft1 ref_1
-               Output: ref_1.v, ((ref_0.v ->> 'c2'::text))::integer
-               Filter: ((ref_1.v ->> 'c3'::text) = '00001'::text)
-               Reader: Single File
-               Row groups: 1
-   ->  Materialize
-         Output: ref_3.v
-         ->  Foreign Scan on public.ft2 ref_3
+         Output: ((ref_0.v ->> 'c2'::text))::bigint, ((ref_0.v ->> 'c1'::text))::bigint, (((ref_0.v ->> 'c2'::text))::integer), (ref_1.v ->> 'c3'::text), ((ref_0.v ->> 'c1'::text))::bigint
+         ->  Nested Loop
+               Output: ref_0.v, ref_1.v, (((ref_0.v ->> 'c2'::text))::integer)
+               ->  Foreign Scan on "S 1"."T1_schemaless" ref_0
+                     Output: ref_0.v
+                     Filter: (((ref_0.v ->> 'c1'::text))::bigint < 10)
+                     Reader: Single File
+                     Row groups: 1
+               ->  Foreign Scan on public.ft1 ref_1
+                     Output: ref_1.v, ((ref_0.v ->> 'c2'::text))::integer
+                     Filter: ((ref_1.v ->> 'c3'::text) = '00001'::text)
+                     Reader: Single File
+                     Row groups: 1
+         ->  Materialize
                Output: ref_3.v
-               Filter: ((ref_3.v ->> 'c3'::text) = '00001'::text)
-               Reader: Single File
-               Row groups: 1
-(21 rows)
+               ->  Foreign Scan on public.ft2 ref_3
+                     Output: ref_3.v
+                     Filter: ((ref_3.v ->> 'c3'::text) = '00001'::text)
+                     Reader: Single File
+                     Row groups: 1
+(24 rows)
 
 --Testcase 275:
 SELECT (ref_0.v->>'c2')::int8 AS c2, subq_1.*
 FROM
-    "S 1"."T1" AS ref_0,
+    "S 1"."T1_schemaless" AS ref_0,
     LATERAL (
         SELECT (ref_0.v->>'c1')::int8 c1, subq_0.*
         FROM (SELECT (ref_0.v->>'c2')::int as c2, (ref_1.v->>'c3') as c3
@@ -5385,8 +5427,8 @@ EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st7;
          Output: NULL::integer, json_build_object('c1', 1001, 'c2', 101, 'c3', 'foo')
 (3 rows)
 
--- ALTER TABLE "S 1"."T1" RENAME TO "T0";
-\set var :PATH_FILENAME'/ported_postgres/T0.parquet'
+-- ALTER TABLE "S 1"."T1_schemaless" RENAME TO "T0";
+\set var :PATH_FILENAME'/ported_postgres/T0_schemaless.parquet'
 --Testcase 499:
 ALTER FOREIGN TABLE ft1 OPTIONS (SET filename :'var');
 --Testcase 323:
@@ -5416,8 +5458,8 @@ EXECUTE st6;
 (9 rows)
 
 -- EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st7;
--- ALTER TABLE "S 1"."T0" RENAME TO "T1";
-\set var :PATH_FILENAME'/ported_postgres/T1.parquet'
+-- ALTER TABLE "S 1"."T0" RENAME TO "T1_schemaless";
+\set var :PATH_FILENAME'/ported_postgres/T1_schemaless.parquet'
 --Testcase 500:
 ALTER FOREIGN TABLE ft1 OPTIONS (SET filename :'var');
 --Testcase 325:
@@ -5581,14 +5623,14 @@ DROP FUNCTION f_test(int);
 --Testcase 341:
 CREATE FOREIGN TABLE reindex_foreign (v jsonb)
   SERVER parquet_s3_srv_2 OPTIONS (filename :'var', sorted 'c1', schemaless 'true');
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1439: ERROR:  parquet_s3_fdw: No such file or directory ('/tmp/data_local/ported_postgres/reindex_local.parquet')
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1443: ERROR:  parquet_s3_fdw: No such file or directory ('/tmp/data_local/ported_postgres/reindex_local.parquet')
 REINDEX TABLE reindex_foreign; -- error
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1440: ERROR:  relation "reindex_foreign" does not exist
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1444: ERROR:  relation "reindex_foreign" does not exist
 REINDEX TABLE CONCURRENTLY reindex_foreign; -- error
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1441: ERROR:  relation "reindex_foreign" does not exist
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1445: ERROR:  relation "reindex_foreign" does not exist
 --Testcase 342:
 DROP FOREIGN TABLE reindex_foreign;
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1443: ERROR:  foreign table "reindex_foreign" does not exist
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1447: ERROR:  foreign table "reindex_foreign" does not exist
 -- partitions and foreign tables
 -- CREATE TABLE reind_fdw_parent (c1 int) PARTITION BY RANGE ((v->>'c1')::int8);
 -- CREATE TABLE reind_fdw_0_10 PARTITION OF reind_fdw_parent
@@ -7333,7 +7375,7 @@ select (v->>'c2')::int as c2, count(*) from ft2 where (v->>'c2')::int < 500 grou
 (13 rows)
 
 --Testcase 356:
-select (v->>'c2')::int as c2, count(*) from "S 1"."T1" where (v->>'c2')::int < 500 group by 1 order by 1;
+select (v->>'c2')::int as c2, count(*) from "S 1"."T1_schemaless" where (v->>'c2')::int < 500 group by 1 order by 1;
  c2 | count 
 ----+-------
   0 |   100
@@ -7518,7 +7560,7 @@ select (v->>'c2')::int as c2, count(*) from ft2 where (v->>'c2')::int < 500 grou
 
 -- none of the above is committed yet remotely
 --Testcase 365:
-select (v->>'c2')::int as c2, count(*) from "S 1"."T1" where (v->>'c2')::int < 500 group by 1 order by 1;
+select (v->>'c2')::int as c2, count(*) from "S 1"."T1_schemaless" where (v->>'c2')::int < 500 group by 1 order by 1;
  c2 | count 
 ----+-------
   0 |   100
@@ -7554,7 +7596,7 @@ select (v->>'c2')::int as c2, count(*) from ft2 where (v->>'c2')::int < 500 grou
 (13 rows)
 
 --Testcase 367:
-select (v->>'c2')::int as c2, count(*) from "S 1"."T1" where (v->>'c2')::int < 500 group by 1 order by 1;
+select (v->>'c2')::int as c2, count(*) from "S 1"."T1_schemaless" where (v->>'c2')::int < 500 group by 1 order by 1;
  c2 | count 
 ----+-------
   0 |   100
@@ -7569,7 +7611,7 @@ select (v->>'c2')::int as c2, count(*) from "S 1"."T1" where (v->>'c2')::int < 5
   9 |   100
 (10 rows)
 
--- VACUUM ANALYZE "S 1"."T1";
+-- VACUUM ANALYZE "S 1"."T1_schemaless";
 -- Above DMLs add data with v->>'c6' as NULL in ft1, so test ORDER BY NULLS LAST and NULLs
 -- FIRST behavior here.
 -- ORDER BY DESC NULLS LAST options
@@ -7688,9 +7730,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT count(*) FROM ft1 WHERE (v->>'c2')::int < 0;
    Output: count(*)
    ->  Foreign Scan on public.ft1
          Filter: (((ft1.v ->> 'c2'::text))::integer < 0)
-         Reader: Single File
-         Row groups: 1
-(6 rows)
+         Reader: Trivial
+(5 rows)
 
 --Testcase 376:
 SELECT count(*) FROM ft1 WHERE (v->>'c2')::int < 0;
@@ -7805,17 +7846,17 @@ Options: check_option=cascaded
 --Testcase 567:
 EXPLAIN (VERBOSE, COSTS OFF)
 INSERT INTO rw_view VALUES (json_build_object('a', 0, 'b', 5));
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1865: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1869: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 568:
 INSERT INTO rw_view VALUES (json_build_object('a', 0, 'b', 5)); -- should fail
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1867: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1871: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 569:
 EXPLAIN (VERBOSE, COSTS OFF)
 INSERT INTO rw_view VALUES (json_build_object('a', 0, 'b', 15));
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1870: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1874: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 570:
 INSERT INTO rw_view VALUES (json_build_object('a', 0, 'b', 15)); -- ok
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1872: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1876: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 571:
 SELECT * FROM foreign_tbl;
  v 
@@ -7825,17 +7866,17 @@ SELECT * FROM foreign_tbl;
 --Testcase 572:
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE rw_view SET v = json_build_object('b', (v->>'b')::int + 5);
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1878: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1882: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 573:
 UPDATE rw_view SET v = json_build_object('b', (v->>'b')::int + 5); -- should fail
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1880: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1884: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 574:
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE rw_view SET v = json_build_object('b', (v->>'b')::int + 15);
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1883: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1887: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 575:
 UPDATE rw_view SET v = json_build_object('b', (v->>'b')::int + 15); -- ok
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1885: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1889: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 576:
 SELECT * FROM foreign_tbl;
  v 
@@ -7844,7 +7885,7 @@ SELECT * FROM foreign_tbl;
 
 --Testcase 389:
 DROP FOREIGN TABLE foreign_tbl CASCADE;
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1890: NOTICE:  drop cascades to view rw_view
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:1894: NOTICE:  drop cascades to view rw_view
 --Testcase 390:
 DROP TRIGGER row_before_insupd_trigger ON base_tbl;
 --Testcase 391:
@@ -8030,48 +8071,48 @@ AFTER INSERT OR UPDATE OR DELETE ON rem1
 FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
 --Testcase 593:
 delete from rem1;
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trigger_func(<NULL>) called: action = DELETE, when = BEFORE, level = STATEMENT
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""hi""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  OLD: ("{""f1"": 10, ""f2"": ""hi remote""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""bye""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  OLD: ("{""f1"": 11, ""f2"": ""bye remote""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""hi""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  OLD: ("{""f1"": 10, ""f2"": ""hi remote""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""bye""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  OLD: ("{""f1"": 11, ""f2"": ""bye remote""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2087: NOTICE:  trigger_func(<NULL>) called: action = DELETE, when = AFTER, level = STATEMENT
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trigger_func(<NULL>) called: action = DELETE, when = BEFORE, level = STATEMENT
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""hi""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 10, ""f2"": ""hi remote""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""bye""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 11, ""f2"": ""bye remote""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""hi""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 10, ""f2"": ""hi remote""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""bye""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 11, ""f2"": ""bye remote""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trigger_func(<NULL>) called: action = DELETE, when = AFTER, level = STATEMENT
 --Testcase 594:
 insert into rem1 values (json_build_object('f1', 1, 'f2', 'insert'));
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2089: NOTICE:  trigger_func(<NULL>) called: action = INSERT, when = BEFORE, level = STATEMENT
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2089: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2089: NOTICE:  NEW: ("{""f1"": 1, ""f2"": ""insert""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2089: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2089: NOTICE:  NEW: ("{""f1"": 1, ""f2"": ""insert""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2089: NOTICE:  trigger_func(<NULL>) called: action = INSERT, when = AFTER, level = STATEMENT
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  trigger_func(<NULL>) called: action = INSERT, when = BEFORE, level = STATEMENT
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  NEW: ("{""f1"": 1, ""f2"": ""insert""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  NEW: ("{""f1"": 1, ""f2"": ""insert""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  trigger_func(<NULL>) called: action = INSERT, when = AFTER, level = STATEMENT
 --Testcase 595:
 update rem1 set v = json_build_object('f2', 'update') where (v->>'f1')::int = 1;
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = BEFORE, level = STATEMENT
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""insert""}"),NEW: ("{""f2"": ""update""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""insert""}"),NEW: ("{""f2"": ""update""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2091: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = AFTER, level = STATEMENT
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2095: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = BEFORE, level = STATEMENT
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2095: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2095: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""insert""}"),NEW: ("{""f2"": ""update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2095: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2095: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""insert""}"),NEW: ("{""f2"": ""update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2095: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = AFTER, level = STATEMENT
 --Testcase 596:
 update rem1 set v = json_build_object('f2', (v->>'f2') || (v->>'f2'));
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = BEFORE, level = STATEMENT
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""update""}"),NEW: ("{""f2"": ""updateupdate""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""update""}"),NEW: ("{""f2"": ""updateupdate""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2093: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = AFTER, level = STATEMENT
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2097: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = BEFORE, level = STATEMENT
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2097: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2097: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""update""}"),NEW: ("{""f2"": ""updateupdate""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2097: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2097: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""update""}"),NEW: ("{""f2"": ""updateupdate""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2097: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = AFTER, level = STATEMENT
 -- cleanup
 --Testcase 597:
 DROP TRIGGER trig_row_before ON rem1;
@@ -8094,28 +8135,28 @@ AFTER INSERT OR UPDATE OR DELETE ON rem1
 FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
 --Testcase 604:
 insert into rem1 values (json_build_object('f1', 1, 'f2', 'insert'));
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2121: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2121: NOTICE:  NEW: ("{""f1"": 1, ""f2"": ""insert""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2121: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2121: NOTICE:  NEW: ("{""f1"": 1, ""f2"": ""insert""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2125: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2125: NOTICE:  NEW: ("{""f1"": 1, ""f2"": ""insert""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2125: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2125: NOTICE:  NEW: ("{""f1"": 1, ""f2"": ""insert""}")
 --Testcase 605:
 update rem1 set v = json_build_object('f2', 'update') where (v->>'f1')::int = 1;
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2123: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2123: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""insert""}"),NEW: ("{""f2"": ""update""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2123: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2123: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""insert""}"),NEW: ("{""f2"": ""update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2127: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2127: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""insert""}"),NEW: ("{""f2"": ""update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2127: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2127: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""insert""}"),NEW: ("{""f2"": ""update""}")
 --Testcase 606:
 update rem1 set v = json_build_object('f2', (v->>'f2') || (v->>'f2'));
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2125: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2125: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""update""}"),NEW: ("{""f2"": ""updateupdate""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2125: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2125: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""update""}"),NEW: ("{""f2"": ""updateupdate""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2129: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2129: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""update""}"),NEW: ("{""f2"": ""updateupdate""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2129: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2129: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""update""}"),NEW: ("{""f2"": ""updateupdate""}")
 --Testcase 607:
 delete from rem1;
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2127: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2127: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""updateupdate""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2127: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2127: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""updateupdate""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2131: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2131: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""updateupdate""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2131: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2131: NOTICE:  OLD: ("{""f1"": 1, ""f2"": ""updateupdate""}")
 -- cleanup
 --Testcase 608:
 DROP TRIGGER trig_row_after1 ON rem1;
@@ -8142,16 +8183,16 @@ UPDATE rem1 set v = json_build_object('f2', 'test');
 -- Insert or update matching: triggers are fired
 --Testcase 614:
 INSERT INTO rem1 values (json_build_object('f1', 2, 'f2', 'update'));
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2159: NOTICE:  trig_row_before_insupd(23, skidoo) BEFORE ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2159: NOTICE:  NEW: ("{""f1"": 2, ""f2"": ""update""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2159: NOTICE:  trig_row_after_insupd(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2159: NOTICE:  NEW: ("{""f1"": 2, ""f2"": ""update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2163: NOTICE:  trig_row_before_insupd(23, skidoo) BEFORE ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2163: NOTICE:  NEW: ("{""f1"": 2, ""f2"": ""update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2163: NOTICE:  trig_row_after_insupd(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2163: NOTICE:  NEW: ("{""f1"": 2, ""f2"": ""update""}")
 --Testcase 615:
 UPDATE rem1 set v = json_build_object('f2', 'update update') where v->>'f1' = '2';
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2161: NOTICE:  trig_row_before_insupd(23, skidoo) BEFORE ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2161: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""update""}"),NEW: ("{""f2"": ""update update""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2161: NOTICE:  trig_row_after_insupd(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2161: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""update""}"),NEW: ("{""f2"": ""update update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2165: NOTICE:  trig_row_before_insupd(23, skidoo) BEFORE ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2165: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""update""}"),NEW: ("{""f2"": ""update update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2165: NOTICE:  trig_row_after_insupd(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2165: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""update""}"),NEW: ("{""f2"": ""update update""}")
 --Testcase 616:
 CREATE TRIGGER trig_row_before_delete
 BEFORE DELETE ON rem1
@@ -8167,10 +8208,10 @@ EXECUTE PROCEDURE trigger_data(23,'skidoo');
 -- Trigger is fired for f1=2, not for f1=1
 --Testcase 618:
 DELETE FROM rem1;
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2179: NOTICE:  trig_row_before_delete(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2179: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""update update""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2179: NOTICE:  trig_row_after_delete(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2179: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""update update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2183: NOTICE:  trig_row_before_delete(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2183: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""update update""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2183: NOTICE:  trig_row_after_delete(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2183: NOTICE:  OLD: ("{""f1"": 2, ""f2"": ""update update""}")
 -- cleanup
 --Testcase 619:
 DROP TRIGGER trig_row_before_insupd ON rem1;
@@ -8366,23 +8407,23 @@ CREATE TRIGGER trig_local_before BEFORE INSERT OR UPDATE ON loc1
 FOR EACH ROW EXECUTE PROCEDURE trig_row_before_insupdate();
 --Testcase 663:
 INSERT INTO rem1 VALUES (json_build_object('f1', 12, 'f2', 'test'));
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2323: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2323: NOTICE:  NEW: ("{""f1"": 12, ""f2"": ""test""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2323: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2323: NOTICE:  NEW: ("{""f1"": 12, ""f2"": ""test""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2327: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2327: NOTICE:  NEW: ("{""f1"": 12, ""f2"": ""test""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2327: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2327: NOTICE:  NEW: ("{""f1"": 12, ""f2"": ""test""}")
 --Testcase 664:
 UPDATE rem1 SET v = json_build_object('f2', 'testo');
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2325: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2325: NOTICE:  OLD: ("{""f1"": 12, ""f2"": ""test""}"),NEW: ("{""f2"": ""testo""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2325: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2325: NOTICE:  OLD: ("{""f1"": 12, ""f2"": ""test""}"),NEW: ("{""f2"": ""testo""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2329: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2329: NOTICE:  OLD: ("{""f1"": 12, ""f2"": ""test""}"),NEW: ("{""f2"": ""testo""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2329: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2329: NOTICE:  OLD: ("{""f1"": 12, ""f2"": ""test""}"),NEW: ("{""f2"": ""testo""}")
 -- Test returning a system attribute
 --Testcase 665:
 INSERT INTO rem1 VALUES (json_build_object('f1', 13, 'f2', 'test'));
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2329: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2329: NOTICE:  NEW: ("{""f1"": 13, ""f2"": ""test""}")
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2329: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2329: NOTICE:  NEW: ("{""f1"": 13, ""f2"": ""test""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2333: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2333: NOTICE:  NEW: ("{""f1"": 13, ""f2"": ""test""}")
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2333: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:2333: NOTICE:  NEW: ("{""f1"": 13, ""f2"": ""test""}")
 -- cleanup
 --Testcase 666:
 DROP TRIGGER trig_row_before ON rem1;
@@ -9208,30 +9249,33 @@ CREATE SCHEMA import_dest1;
 IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS (sorted 'c1', schemaless 'true');
 --Testcase 403:
 \det+ import_dest1.*
-                                                                   List of foreign tables
-    Schema    |   Table    |     Server     |                                           FDW options                                           | Description 
---------------+------------+----------------+-------------------------------------------------------------------------------------------------+-------------
- import_dest1 | T0         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T0.parquet', sorted 'c1', schemaless 'true')         | 
- import_dest1 | T1         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T1.parquet', sorted 'c1', schemaless 'true')         | 
- import_dest1 | T2         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T2.parquet', sorted 'c1', schemaless 'true')         | 
- import_dest1 | T3         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T3.parquet', sorted 'c1', schemaless 'true')         | 
- import_dest1 | T4         | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T4.parquet', sorted 'c1', schemaless 'true')         | 
- import_dest1 | base_tbl   | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/base_tbl.parquet', sorted 'c1', schemaless 'true')   | 
- import_dest1 | child_tbl  | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/child_tbl.parquet', sorted 'c1', schemaless 'true')  | 
- import_dest1 | ft1        | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/ft1.parquet', sorted 'c1', schemaless 'true')        | 
- import_dest1 | ft1_null   | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/ft1_null.parquet', sorted 'c1', schemaless 'true')   | 
- import_dest1 | gloc1      | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/gloc1.parquet', sorted 'c1', schemaless 'true')      | 
- import_dest1 | loc1       | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loc1.parquet', sorted 'c1', schemaless 'true')       | 
- import_dest1 | local_tbl  | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/local_tbl.parquet', sorted 'c1', schemaless 'true')  | 
- import_dest1 | loct       | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct.parquet', sorted 'c1', schemaless 'true')       | 
- import_dest1 | loct1      | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct1.parquet', sorted 'c1', schemaless 'true')      | 
- import_dest1 | loct2      | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct2.parquet', sorted 'c1', schemaless 'true')      | 
- import_dest1 | loct3      | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct3.parquet', sorted 'c1', schemaless 'true')      | 
- import_dest1 | loct3_1    | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct3_1.parquet', sorted 'c1', schemaless 'true')    | 
- import_dest1 | loct4      | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct4.parquet', sorted 'c1', schemaless 'true')      | 
- import_dest1 | loct4_1    | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct4_1.parquet', sorted 'c1', schemaless 'true')    | 
- import_dest1 | loct_empty | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct_empty.parquet', sorted 'c1', schemaless 'true') | 
-(20 rows)
+                                                                       List of foreign tables
+    Schema    |     Table      |     Server     |                                             FDW options                                             | Description 
+--------------+----------------+----------------+-----------------------------------------------------------------------------------------------------+-------------
+ import_dest1 | T0             | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T0.parquet', sorted 'c1', schemaless 'true')             | 
+ import_dest1 | T0_schemaless  | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T0_schemaless.parquet', sorted 'c1', schemaless 'true')  | 
+ import_dest1 | T1             | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T1.parquet', sorted 'c1', schemaless 'true')             | 
+ import_dest1 | T1_schemaless  | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T1_schemaless.parquet', sorted 'c1', schemaless 'true')  | 
+ import_dest1 | T2             | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T2.parquet', sorted 'c1', schemaless 'true')             | 
+ import_dest1 | T3             | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T3.parquet', sorted 'c1', schemaless 'true')             | 
+ import_dest1 | T4             | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/T4.parquet', sorted 'c1', schemaless 'true')             | 
+ import_dest1 | base_tbl       | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/base_tbl.parquet', sorted 'c1', schemaless 'true')       | 
+ import_dest1 | child_tbl      | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/child_tbl.parquet', sorted 'c1', schemaless 'true')      | 
+ import_dest1 | ft1            | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/ft1.parquet', sorted 'c1', schemaless 'true')            | 
+ import_dest1 | ft1_null       | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/ft1_null.parquet', sorted 'c1', schemaless 'true')       | 
+ import_dest1 | ft1_schemaless | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/ft1_schemaless.parquet', sorted 'c1', schemaless 'true') | 
+ import_dest1 | gloc1          | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/gloc1.parquet', sorted 'c1', schemaless 'true')          | 
+ import_dest1 | loc1           | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loc1.parquet', sorted 'c1', schemaless 'true')           | 
+ import_dest1 | local_tbl      | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/local_tbl.parquet', sorted 'c1', schemaless 'true')      | 
+ import_dest1 | loct           | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct.parquet', sorted 'c1', schemaless 'true')           | 
+ import_dest1 | loct1          | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct1.parquet', sorted 'c1', schemaless 'true')          | 
+ import_dest1 | loct2          | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct2.parquet', sorted 'c1', schemaless 'true')          | 
+ import_dest1 | loct3          | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct3.parquet', sorted 'c1', schemaless 'true')          | 
+ import_dest1 | loct3_1        | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct3_1.parquet', sorted 'c1', schemaless 'true')        | 
+ import_dest1 | loct4          | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct4.parquet', sorted 'c1', schemaless 'true')          | 
+ import_dest1 | loct4_1        | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct4_1.parquet', sorted 'c1', schemaless 'true')        | 
+ import_dest1 | loct_empty     | parquet_s3_srv | (filename '/tmp/data_local/ported_postgres/loct_empty.parquet', sorted 'c1', schemaless 'true')     | 
+(23 rows)
 
 --Testcase 404:
 \d import_dest1.*
@@ -9242,12 +9286,26 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS 
 Server: parquet_s3_srv
 FDW options: (filename '/tmp/data_local/ported_postgres/T0.parquet', sorted 'c1', schemaless 'true')
 
+          Foreign table "import_dest1.T0_schemaless"
+ Column | Type  | Collation | Nullable | Default | FDW options 
+--------+-------+-----------+----------+---------+-------------
+ v      | jsonb |           |          |         | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/ported_postgres/T0_schemaless.parquet', sorted 'c1', schemaless 'true')
+
                 Foreign table "import_dest1.T1"
  Column | Type  | Collation | Nullable | Default | FDW options 
 --------+-------+-----------+----------+---------+-------------
  v      | jsonb |           |          |         | 
 Server: parquet_s3_srv
 FDW options: (filename '/tmp/data_local/ported_postgres/T1.parquet', sorted 'c1', schemaless 'true')
+
+          Foreign table "import_dest1.T1_schemaless"
+ Column | Type  | Collation | Nullable | Default | FDW options 
+--------+-------+-----------+----------+---------+-------------
+ v      | jsonb |           |          |         | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/ported_postgres/T1_schemaless.parquet', sorted 'c1', schemaless 'true')
 
                 Foreign table "import_dest1.T2"
  Column | Type  | Collation | Nullable | Default | FDW options 
@@ -9297,6 +9355,13 @@ FDW options: (filename '/tmp/data_local/ported_postgres/ft1.parquet', sorted 'c1
  v      | jsonb |           |          |         | 
 Server: parquet_s3_srv
 FDW options: (filename '/tmp/data_local/ported_postgres/ft1_null.parquet', sorted 'c1', schemaless 'true')
+
+          Foreign table "import_dest1.ft1_schemaless"
+ Column | Type  | Collation | Nullable | Default | FDW options 
+--------+-------+-----------+----------+---------+-------------
+ v      | jsonb |           |          |         | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/ported_postgres/ft1_schemaless.parquet', sorted 'c1', schemaless 'true')
 
               Foreign table "import_dest1.gloc1"
  Column | Type  | Collation | Nullable | Default | FDW options 
@@ -9696,7 +9761,7 @@ SELECT server_name FROM parquet_s3_fdw_get_connections() ORDER BY 1;  -- return 
 ALTER SERVER parquet_s3_srv OPTIONS (ADD use_remote_estimate 'off');
 --Testcase 410:
 DROP SERVER parquet_s3_srv_3 CASCADE;
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:3515: NOTICE:  drop cascades to 2 other objects
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:3519: NOTICE:  drop cascades to 2 other objects
 DETAIL:  drop cascades to user mapping for public on server parquet_s3_srv_3
 drop cascades to foreign table ft7
 -- List all the existing cached connections. parquet_s3_srv and parquet_s3_srv_3
@@ -9792,7 +9857,7 @@ SELECT parquet_s3_fdw_disconnect('parquet_s3_srv_2');
 -- Return an error as there is no foreign server with given name.
 --Testcase 420:
 SELECT parquet_s3_fdw_disconnect('unknownserver');
-psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:3568: ERROR:  server "unknownserver" does not exist
+psql:sql/13.12/schemaless/parquet_s3_fdw_post.sql:3572: ERROR:  server "unknownserver" does not exist
 -- Let's ensure to close all the existing cached connections.
 --Testcase 421:
 SELECT 1 FROM parquet_s3_fdw_disconnect_all();

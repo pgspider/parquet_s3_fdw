@@ -25,7 +25,6 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 
-
 /*
  * Check if the provided option is one of the valid options.
  */
@@ -83,7 +82,7 @@ parquet_s3_extract_options(List *options, parquet_s3_server_opt * opt)
  * Fetch the options for a parquet_s3_fdw foreign table.
  */
 parquet_s3_server_opt *
-parquet_s3_get_options(Oid foreignoid)
+parquet_s3_get_options(Oid foreignoid, Oid userid)
 {
 	ForeignTable *f_table = NULL;
 	ForeignServer *f_server = NULL;
@@ -116,7 +115,7 @@ parquet_s3_get_options(Oid foreignoid)
 	}
 	PG_END_TRY();
 
-	f_mapping = GetUserMapping(GetUserId(), f_server->serverid);
+	f_mapping = GetUserMapping(userid, f_server->serverid);
 
 	options = NIL;
 	if (f_table)

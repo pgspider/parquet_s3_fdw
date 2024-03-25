@@ -40,6 +40,11 @@ CREATE SCHEMA "S 1";
 \set var '\"':PATH_FILENAME'\/ported_postgres\"'
 IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO "S 1" OPTIONS (sorted 'c1');
 
+-- some file does not have column c1
+ALTER FOREIGN TABLE "S 1"."T1" OPTIONS (SET sorted '"C 1"');
+ALTER FOREIGN TABLE "S 1"."T0" OPTIONS (SET sorted '"C 1"');
+ALTER FOREIGN TABLE "S 1"."ft1" OPTIONS (SET sorted '"C 1"');
+
 -- -- Disable autovacuum for these tables to avoid unexpected effects of that
 -- ALTER TABLE "S 1"."T1" SET (autovacuum_enabled = 'false');
 -- ALTER TABLE "S 1"."T2" SET (autovacuum_enabled = 'false');
@@ -184,9 +189,9 @@ OPTIONS (filename :'var', sorted 'c1');
 
 -- ALTER FOREIGN TABLE ft1 OPTIONS (schema_name 'S 1', table_name 'T 1');
 -- ALTER FOREIGN TABLE ft2 OPTIONS (schema_name 'S 1', table_name 'T 1');
--- ALTER FOREIGN TABLE ft1 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
--- ALTER FOREIGN TABLE ft2 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
--- \det+
+ALTER FOREIGN TABLE ft1 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
+ALTER FOREIGN TABLE ft2 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
+\det+
 
 -- Test that alteration of server options causes reconnection
 -- Remote's errors might be non-English, so hide them to ensure stable results
@@ -322,37 +327,37 @@ SET enable_nestloop TO false;
 -- inner join; expressions in the clauses appear in the equivalence class list
 --Testcase 39:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1, t2.c1 FROM ft2 t1 JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSET 100 LIMIT 10;
+	SELECT t1.c1, t2."C 1" FROM ft2 t1 JOIN "S 1"."T1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
 --Testcase 40:
-SELECT t1.c1, t2.c1 FROM ft2 t1 JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSET 100 LIMIT 10;
+SELECT t1.c1, t2."C 1" FROM ft2 t1 JOIN "S 1"."T1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
 -- outer join; expressions in the clauses do not appear in equivalence class
 -- list but no output change as compared to the previous query
 --Testcase 41:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1, t2.c1 FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSET 100 LIMIT 10;
+	SELECT t1.c1, t2."C 1" FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
 --Testcase 42:
-SELECT t1.c1, t2.c1 FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSET 100 LIMIT 10;
+SELECT t1.c1, t2."C 1" FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
 -- A join between local table and foreign join. ORDER BY clause is added to the
 -- foreign join so that the local table can be joined using merge join strategy.
 --Testcase 43:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
+	SELECT t1."C 1" FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
 --Testcase 44:
-SELECT t1.c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
+SELECT t1."C 1" FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
 -- Test similar to above, except that the full join prevents any equivalence
 -- classes from being merged. This produces single relation equivalence classes
 -- included in join restrictions.
 --Testcase 45:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1, t2.c1, t3.c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
+	SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
 --Testcase 46:
-SELECT t1.c1, t2.c1, t3.c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
+SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
 -- Test similar to above with all full outer joins
 --Testcase 47:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1, t2.c1, t3.c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
+	SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
 --Testcase 48:
-SELECT t1.c1, t2.c1, t3.c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
+SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
 --Testcase 465:
 RESET enable_hashjoin;
 --Testcase 466:
@@ -397,9 +402,9 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 t1 WHERE c8 = 'foo';  -- can't be
 -- parameterized remote path for foreign table
 --Testcase 62:
 EXPLAIN (VERBOSE, COSTS OFF)
-  SELECT * FROM "S 1"."T1" a, ft2 b WHERE a.c1 = 47 AND b.c1 = a.c2;
+  SELECT * FROM "S 1"."T1" a, ft2 b WHERE a."C 1" = 47 AND b.c1 = a.c2;
 --Testcase 63:
-SELECT * FROM "S 1"."T1" a, ft2 b WHERE a.c1 = 47 AND b.c1 = a.c2;
+SELECT * FROM "S 1"."T1" a, ft2 b WHERE a."C 1" = 47 AND b.c1 = a.c2;
 -- check both safe and unsafe join conditions
 --Testcase 64:
 EXPLAIN (VERBOSE, COSTS OFF)
@@ -809,9 +814,9 @@ SELECT t1c1, avg(t1c1 + t2c1) FROM (SELECT t1.c1, t2.c1 FROM ft1 t1 JOIN ft2 t2 
 -- join with lateral reference
 --Testcase 163:
 EXPLAIN (VERBOSE, COSTS OFF)
-SELECT t1.c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1.c1 OFFSET 10 LIMIT 10;
+SELECT t1."C 1" FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1."C 1" OFFSET 10 LIMIT 10;
 --Testcase 164:
-SELECT t1.c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1.c1 OFFSET 10 LIMIT 10;
+SELECT t1."C 1" FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1."C 1" OFFSET 10 LIMIT 10;
 -- join with pseudoconstant quals, not pushed down.
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1, t2.c1 FROM ft1 t1 JOIN ft2 t2 ON (t1.c1 = t2.c1 AND CURRENT_USER = SESSION_USER) ORDER BY t1.c3, t1.c1 OFFSET 100 LIMIT 10;
@@ -1378,9 +1383,9 @@ select sum(c2) * (random() <= 1)::int as sum from ft1 order by 1;
 set enable_hashagg to false;
 --Testcase 272:
 explain (verbose, costs off)
-select c2, sum from "S 1"."T1" t1, lateral (select sum(t2.c1 + t1.c1) sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1.c1 < 100 order by 1;
+select c2, sum from "S 1"."T1" t1, lateral (select sum(t2.c1 + t1."C 1") sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1."C 1" < 100 order by 1;
 --Testcase 273:
-select c2, sum from "S 1"."T1" t1, lateral (select sum(t2.c1 + t1.c1) sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1.c1 < 100 order by 1;
+select c2, sum from "S 1"."T1" t1, lateral (select sum(t2.c1 + t1."C 1") sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1."C 1" < 100 order by 1;
 --Testcase 508:
 reset enable_hashagg;
 
@@ -1391,26 +1396,26 @@ SELECT ref_0.c2, subq_1.*
 FROM
     "S 1"."T1" AS ref_0,
     LATERAL (
-        SELECT ref_0.c1 c1, subq_0.*
+        SELECT ref_0."C 1" c1, subq_0.*
         FROM (SELECT ref_0.c2, ref_1.c3
               FROM ft1 AS ref_1) AS subq_0
              RIGHT JOIN ft2 AS ref_3 ON (subq_0.c3 = ref_3.c3)
     ) AS subq_1
-WHERE ref_0.c1 < 10 AND subq_1.c3 = '00001'
-ORDER BY ref_0.c1;
+WHERE ref_0."C 1" < 10 AND subq_1.c3 = '00001'
+ORDER BY ref_0."C 1";
 
 --Testcase 275:
 SELECT ref_0.c2, subq_1.*
 FROM
     "S 1"."T1" AS ref_0,
     LATERAL (
-        SELECT ref_0.c1 c1, subq_0.*
+        SELECT ref_0."C 1" c1, subq_0.*
         FROM (SELECT ref_0.c2, ref_1.c3
               FROM ft1 AS ref_1) AS subq_0
              RIGHT JOIN ft2 AS ref_3 ON (subq_0.c3 = ref_3.c3)
     ) AS subq_1
-WHERE ref_0.c1 < 10 AND subq_1.c3 = '00001'
-ORDER BY ref_0.c1;
+WHERE ref_0."C 1" < 10 AND subq_1.c3 = '00001'
+ORDER BY ref_0."C 1";
 
 -- Check with placeHolderVars
 --Testcase 276:

@@ -81,6 +81,10 @@ private:
     /* true if taget file is new file (does not existed) */
     bool                            is_new_file;
 
+    /* foreign table information is used to get compression options */
+    TupleDesc                       tupleDesc;
+    Oid                             relid;
+
 private:
     /* read target file and cache data to cache_data */
     void cache_parquet_file_data();
@@ -103,8 +107,17 @@ private:
                                                                 bool need_finished);
     /* create arrow table from cache data */
     std::shared_ptr<arrow::Table> create_arrow_table();
-    /* write arrow table to a parqet file */
-    void parquet_write_file(const char *dirname, Aws::S3::S3Client *s3_client, const arrow::Table& table);
+    /* set table compression */
+    std::shared_ptr<parquet::WriterProperties> set_table_compression();
+    /* get compression type by name */
+    arrow::Compression::type get_compression_type_by_name(char *compression_name);
+    /* get compression name by type */
+    char * get_compression_name_by_type(arrow::Compression::type compression_type);
+    void retain_column_compression(parquet::WriterProperties::Builder *builder, size_t col_idx);
+    bool set_column_compression(parquet::WriterProperties::Builder *builder, AttrNumber attrno, size_t col_idx = 0);
+
+    /* write arrow table to a parquet file */
+    void parquet_write_file(const char *dirname, Aws::S3::S3Client *s3_client, const arrow::Table& table, std::shared_ptr<parquet::WriterProperties> props);
 
     /* CAST HELPER FUNCTIONS */
     /* init cast from postgres type to mapped parquet file */
@@ -152,6 +165,8 @@ private:
 public:
     ModifyParquetReader(const char* filename,
                         MemoryContext cxt,
+                        TupleDesc tupleDesc,
+                        Oid relid,
                         std::shared_ptr<arrow::Schema> schema = nullptr,
                         bool is_new_file = false,
                         int reader_id = -1);
@@ -180,7 +195,7 @@ public:
     void set_sorted_col_list(std::set<std::string> sorted_cols);
     void set_schemaless(bool schemaless);
     void set_keycol_names(std::set<std::string> keycol_names);
-    void create_column_mapping(TupleDesc tupleDesc, const std::set<int> &attrs_used);
+    void create_column_mapping(TupleDesc tupleDesc, Oid relid, const std::set<int> &attrs_used);
     std::shared_ptr<arrow::Schema> get_file_schema();
     void create_new_file_temp_cache();
 
@@ -201,6 +216,8 @@ public:
 
 ModifyParquetReader *create_modify_parquet_reader(const char *filename,
                                                   MemoryContext cxt,
+                                                  TupleDesc tupleDesc,
+                                                  Oid relid,
                                                   std::shared_ptr<arrow::Schema> schema = nullptr,
                                                   bool is_new_file = false,
                                                   int reader_id = -1);

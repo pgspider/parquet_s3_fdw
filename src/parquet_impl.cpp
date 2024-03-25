@@ -52,6 +52,7 @@ extern "C"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_attribute.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
 #include "executor/spi.h"
@@ -74,6 +75,7 @@ extern "C"
 #include "parser/parse_func.h"
 #include "parser/parse_type.h"
 #include "parser/parsetree.h"
+#include "parser/scansup.h"
 #include "utils/builtins.h"
 #include "utils/jsonb.h"
 #include "utils/lsyscache.h"
@@ -103,6 +105,13 @@ extern "C"
 #endif
 }
 
+/* List of the parquet compression type */
+static const char *ParquetCompressionTypeList[] = {
+	PARQUET_NO_COMPRESSION,
+	PARQUET_COMPRESSION_SNAPPY,
+	PARQUET_COMPRESSION_ZSTD,
+	NULL
+};
 
 /* from costsize.c */
 #define LOG2(x)  (log(x) / 0.693147180559945)
@@ -202,6 +211,7 @@ struct ParquetFdwPlanState
 
 static void get_filenames_in_dir(ParquetFdwPlanState *fdw_private);
 static void parquet_s3_extract_slcols(ParquetFdwPlanState *fpinfo, PlannerInfo *root, RelOptInfo *baserel, List *tlist);
+static bool exist_in_string_list(char *str, const char **strlist);
 
 static int
 get_strategy(Oid type, Oid opno, Oid am)
@@ -771,14 +781,12 @@ parquet_s3_column_is_existed(parquet::arrow::SchemaManifest manifest, char *colu
     for (auto &schema_field : manifest.schema_fields)
     {
         auto       &field = schema_field.field;
-        char        arrow_colname[NAMEDATALEN];
 
         if (field->name().length() > NAMEDATALEN - 1)
             throw Error("parquet column name '%s' is too long (max: %d)",
                         field->name().c_str(), NAMEDATALEN - 1);
-        tolowercase(field->name().c_str(), arrow_colname);
 
-        if (strcmp(column_name, arrow_colname) == 0)
+        if (strcmp(column_name, field->name().c_str()) == 0)
             return true;    /* Found!!! */
     }
 
@@ -796,7 +804,7 @@ List *
 extract_rowgroups_list(const char *filename,
                        const char *dirname,
                        Aws::S3::S3Client *s3_client,
-                       TupleDesc tupleDesc,
+                       Relation rel,
                        std::list<RowGroupFilter> &filters,
                        uint64 *matched_rows,
                        uint64 *total_rows,
@@ -855,12 +863,12 @@ extract_rowgroups_list(const char *filename,
             for (auto &filter : filters)
             {
                 AttrNumber      attnum;
-                char            pg_colname[NAMEDATALEN];
+                char           *pg_colname;
 
                 if (schemaless)
                 {
                     /* In schemaless mode, attname has already existed  */
-                    tolowercase(filter.attname, pg_colname);
+                    pg_colname = filter.attname;
 
                     if (filter.is_column == true)
                     {
@@ -878,9 +886,25 @@ extract_rowgroups_list(const char *filename,
                 }
                 else
                 {
+                    List        *options;
+                    ListCell    *lc;
+                    TupleDesc   tupleDesc = RelationGetDescr(rel);
+
                     attnum = filter.attnum - 1;
-                    tolowercase(NameStr(TupleDescAttr(tupleDesc, attnum)->attname),
-                                pg_colname);
+                    pg_colname = NameStr(TupleDescAttr(tupleDesc, attnum)->attname);
+
+                    /* If column_name option is used, get column name from the defined option */
+                    options = GetForeignColumnOptions(RelationGetRelid(rel), attnum + 1);
+                    foreach (lc, options)
+                    {
+                        DefElem *def = (DefElem *)lfirst(lc);
+
+                        if (strcmp(def->defname, ATTRIBUTE_OPTION_COLUMN_NAME) == 0)
+                        {
+                            pg_colname = defGetString(def);
+                            break;
+                        }
+                    }
                 }
 
                 /*
@@ -891,7 +915,6 @@ extract_rowgroups_list(const char *filename,
                     MemoryContext   ccxt = CurrentMemoryContext;
                     bool            error = false;
                     char            errstr[ERROR_STR_LEN];
-                    char            arrow_colname[NAMEDATALEN];
                     auto           &field = schema_field.field;
                     int             column_index;
 
@@ -900,12 +923,15 @@ extract_rowgroups_list(const char *filename,
                         && field->type()->id() != arrow::Type::MAP)
                         continue;
 
+                    /* Skip string comparison due to Collation mismatch between Arrow and PostgreSQL */
+                    if (field->type()->id() == arrow::Type::STRING)
+                        continue;
+
                     if (field->name().length() > NAMEDATALEN - 1)
                         throw Error("parquet column name '%s' is too long (max: %d)",
                                     field->name().c_str(), NAMEDATALEN - 1);
-                    tolowercase(field->name().c_str(), arrow_colname);
 
-                    if (strcmp(pg_colname, arrow_colname) != 0)
+                    if (strcmp(pg_colname, field->name().c_str()) != 0)
                         continue;
 
                     /* in schemaless mode, skip filter if parquet column type is not match with actual column (explicit cast) type */
@@ -1126,6 +1152,34 @@ extract_parquet_fields(const char *path, const char *dirname, Aws::S3::S3Client 
 }
 
 /*
+ * Append a SQL string literal representing "val" to buf.
+ */
+static void
+quote_string_literal(StringInfo buf, const char *val)
+{
+	const char *valptr;
+
+	/*
+	 * Rather than making assumptions about the remote server's value of
+	 * standard_conforming_strings, always use E'foo' syntax if there are any
+	 * backslashes.  This will fail on remote servers before 8.1, but those
+	 * are long out of support.
+	 */
+	if (strchr(val, '\\') != NULL)
+		appendStringInfoChar(buf, ESCAPE_STRING_SYNTAX);
+	appendStringInfoChar(buf, '\'');
+	for (valptr = val; *valptr; valptr++)
+	{
+		char		ch = *valptr;
+
+		if (SQL_STR_DOUBLE(ch, true))
+			appendStringInfoChar(buf, ch);
+		appendStringInfoChar(buf, ch);
+	}
+	appendStringInfoChar(buf, '\'');
+}
+
+/*
  * create_foreign_table_query
  *      Produce a query text for creating a new foreign table.
  */
@@ -1137,6 +1191,7 @@ create_foreign_table_query(const char *tablename,
                            List *fields, List *options)
 {
     StringInfoData  str;
+    StringInfoData  filename_opt;
     ListCell       *lc;
     bool		    schemaless = false;
     bool            is_first = true;
@@ -1186,6 +1241,14 @@ create_foreign_table_query(const char *tablename,
                 is_first = false;
             }
 
+            /*
+             * Add column_name option so that renaming the foreign table's
+             * column doesn't break the association to the underlying
+             * column.
+             */
+            appendStringInfoString(&str, " OPTIONS (column_name ");
+            quote_string_literal(&str, name);
+
             if (key_columns)
             {
                 ListCell *lc2;
@@ -1196,29 +1259,32 @@ create_foreign_table_query(const char *tablename,
 
                     if (strcmp(name, key_column_name) == 0)
                     {
-                        appendStringInfo(&str, " OPTIONS (key 'true')");
+                        appendStringInfo(&str, ", key 'true'");
                         break;
                     }
                 }
             }
+
+            appendStringInfo(&str, ")");
         }
     }
 
     appendStringInfo(&str, ") SERVER %s ", quote_identifier(servername));
-    appendStringInfo(&str, "OPTIONS (filename '");
+    appendStringInfo(&str, "OPTIONS (filename ");
 
     /* list paths */
+    initStringInfo(&filename_opt);
     is_first = true;
     for (int i = 0; i < npaths; ++i)
     {
         if (!is_first)
-            appendStringInfoChar(&str, ' ');
+            appendStringInfoChar(&filename_opt, ' ');
         else
             is_first = false;
 
-        appendStringInfoString(&str, paths[i]);
+        appendStringInfoString(&filename_opt, paths[i]);
     }
-    appendStringInfoChar(&str, '\'');
+    quote_string_literal(&str, filename_opt.data);
 
     /* list options */
     foreach(lc, options)
@@ -1229,7 +1295,8 @@ create_foreign_table_query(const char *tablename,
         if (!schemaless && strcmp(def->defname, "key_columns") == 0)
             continue;
 
-        appendStringInfo(&str, ", %s '%s'", def->defname, defGetString(def));
+        appendStringInfo(&str, ", %s", def->defname);
+        quote_string_literal(&str, defGetString(def));
     }
 
     appendStringInfo(&str, ")");
@@ -1267,18 +1334,93 @@ destroy_parquet_modify_state(void *arg)
  * C interface functions
  */
 
+/**
+ * parse_attributes_list
+ *     split a string to a list of sub-strings.
+ *     Each sub-string is separated by a space character.
+ *     If sub-string has space character(s), it must be double quoted.
+ * 
+ *     Reference: SplitIdentifierString() function of PostgreSQL 16.0
+ */
 static List *
-parse_attributes_list(char *start)
+parse_attributes_list(char *rawstring)
 {
     List      *attrs = NIL;
-    char      *token;
-    const char *delim = " ";
+    char      separator = ' ';
 
-    while ((token = strtok(start, delim)) != NULL)
+    char *nextp = rawstring;
+    bool done = false;
+
+    while (scanner_isspace(*nextp))
+        nextp++; /* skip leading whitespace */
+
+    if (*nextp == '\0')
+        return NIL; /* allow empty string */
+
+    /* At the top of the loop, we are at start of a new identifier. */
+    do
     {
-        attrs = lappend(attrs, pstrdup(token));
-        start = NULL;
-    }
+        char *curname;
+        char *endp;
+
+        if (*nextp == '"')
+        {
+            /* Quoted name --- collapse quote-quote pairs, no downcasing */
+            curname = nextp + 1;
+            for (;;)
+            {
+                endp = strchr(nextp + 1, '"');
+                if (endp == NULL)
+                {
+                    /* mismatched quotes */
+                    elog(ERROR, "parquet_s3_fdw: mismatched quotes - %s", rawstring);
+                }
+                if (endp[1] != '"')
+                    break; /* found end of quoted name */
+                /* Collapse adjacent quotes into one quote, and look again */
+                memmove(endp, endp + 1, strlen(endp));
+                nextp = endp;
+            }
+            /* endp now points at the terminating quote */
+            nextp = endp + 1;
+        }
+        else
+        {
+            /* Unquoted name --- extends to separator or whitespace */
+            curname = nextp;
+            while (*nextp && *nextp != separator &&
+                   !scanner_isspace(*nextp))
+                nextp++;
+            endp = nextp;
+            if (curname == nextp)
+                return NIL; /* empty unquoted name not allowed */
+        }
+
+        if (*nextp == separator)
+        {
+            nextp++;
+            while (scanner_isspace(*nextp))
+                nextp++; /* skip leading whitespace for next */
+                         /* we expect another name, so done remains false */
+        }
+        else if (*nextp == '\0')
+            done = true;
+        else
+        {
+            /* invalid syntax */
+            elog(ERROR, "parquet_s3_fdw: invalid syntax - %s", rawstring);
+        }
+
+        /* Now safe to overwrite separator with a null */
+        *endp = '\0';
+
+        /*
+         * Finished isolating current name --- add it to list
+         */
+        attrs = lappend(attrs, curname);
+
+        /* Loop back if we didn't reach end of string */
+    } while (!done);
 
     return attrs;
 }
@@ -1475,6 +1617,10 @@ get_table_options(Oid relid, ParquetFdwPlanState *fdw_private)
         {
             fdw_private->key_columns = parse_attributes_list(defGetString(def));
         }
+        else if (strcmp(def->defname, "compression_type") == 0)
+        {
+            /* do nothing */
+        }
         else
             elog(ERROR, "parquet_s3_fdw: unknown option '%s'", def->defname);
     }
@@ -1492,7 +1638,6 @@ parquetGetForeignRelSize(PlannerInfo *root,
     std::list<RowGroupFilter> filters;
     RangeTblEntry  *rte = planner_rt_fetch(baserel->relid, root);
     Relation        rel;
-    TupleDesc       tupleDesc;
     List           *filenames_orig;
     ListCell       *lc;
     uint64          matched_rows = 0;
@@ -1535,7 +1680,6 @@ parquetGetForeignRelSize(PlannerInfo *root,
 #else
     rel = table_open(rte->relid, AccessShareLock);
 #endif
-    tupleDesc = RelationGetDescr(rel);
 
     /*
      * Extract list of row groups that match query clauses. Also calculate
@@ -1548,7 +1692,7 @@ parquetGetForeignRelSize(PlannerInfo *root,
     {
         char *filename = strVal(lfirst(lc));
         List *rowgroups = extract_rowgroups_list(filename, fdw_private->dirname, fdw_private->s3client,
-                                                 tupleDesc, filters, &matched_rows, &total_rows, fdw_private->schemaless);
+                                                 rel, filters, &matched_rows, &total_rows, fdw_private->schemaless);
 
         if (rowgroups)
         {
@@ -1721,14 +1865,12 @@ schemaless_get_sorted_column_type(Aws::S3::S3Client *s3_client, List *file_list,
                 for (auto &schema_field : manifest.schema_fields)
                 {
                     auto field_name = schema_field.field->name();
-                    char arrow_colname[NAMEDATALEN];
 
                     if (field_name.length() > NAMEDATALEN - 1)
                         throw Error("parquet column name '%s' is too long (max: %d)",
                                     field_name.c_str(), NAMEDATALEN - 1);
-                    tolowercase(field_name.c_str(), arrow_colname);
 
-                    if (attrs_sorted_is_taken[attrs_sorted_idx] == false && strcmp(attname, arrow_colname) == 0)
+                    if (attrs_sorted_is_taken[attrs_sorted_idx] == false && strcmp(attname, field_name.c_str()) == 0)
                     {
                         /* Found it! */
                         auto arrow_type_id = schema_field.field->type()->id();
@@ -2323,6 +2465,7 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
     MemoryContext   cxt = estate->es_query_cxt;
     TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
     TupleDesc       tupleDesc = slot->tts_tupleDescriptor;
+    Oid             relid = RelationGetRelid(node->ss.ss_currentRelation);
 
     reader_cxt = AllocSetContextCreate(cxt,
                                        "parquet_s3_fdw tuple data",
@@ -2336,7 +2479,6 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
         Oid     typid;
         int     typmod;
         Oid     collid;
-        Oid     relid = RelationGetRelid(node->ss.ss_currentRelation);
         Oid     sort_op;
         int     attr;
 
@@ -2353,7 +2495,7 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
             attr = get_attnum(relid, attname);
             if (attr == InvalidAttrNumber)
             {
-                elog(ERROR, "paruqet_s3_fdw: invalid attribute name '%s'", attname);
+                elog(ERROR, "parquet_s3_fdw: invalid attribute name '%s'", attname);
             }
 
             memset(&sort_key, 0, sizeof(SortSupportData));
@@ -2385,7 +2527,7 @@ parquetBeginForeignScan(ForeignScanState *node, int /* eflags */)
 
     try
     {
-        festate = create_parquet_execution_state(reader_type, reader_cxt, dirname, s3client, tupleDesc,
+        festate = create_parquet_execution_state(reader_type, reader_cxt, dirname, s3client, tupleDesc, relid,
                                                  attrs_used, sort_keys,
                                                  use_threads, use_mmap,
                                                  max_open_files, schemaless,
@@ -2472,6 +2614,7 @@ parquetEndForeignScan(ForeignScanState *node)
     int             i = 0;
     ListCell       *lc;
     Oid             foreigntableid = 0;
+    Oid             userid;
 
     foreach (lc, fdw_private)
     {
@@ -2485,7 +2628,26 @@ parquetEndForeignScan(ForeignScanState *node)
 
     if (foreigntableid != 0)
     {
-        parquet_s3_server_opt *options = parquet_s3_get_options(foreigntableid);
+#if PG_VERSION_NUM < 160000
+        EState         *estate = node->ss.ps.state;
+        RangeTblEntry  *rte;
+        int             rtindex;
+
+        if (plan->scan.scanrelid > 0)
+            rtindex = plan->scan.scanrelid;
+        else
+            rtindex = bms_next_member(plan->fs_relids, -1);
+
+        rte = rt_fetch(rtindex, estate->es_range_table);
+        userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+#else
+        /*
+         * Identify which user to do the remote access as.  This should match what
+         * ExecCheckPermissions() does.
+         */
+        userid = OidIsValid(plan->checkAsUser) ? plan->checkAsUser : GetUserId();
+#endif
+        parquet_s3_server_opt *options = parquet_s3_get_options(foreigntableid, userid);
 
         if (options->keep_connections == false)
             parquet_disconnect_s3_server();
@@ -2510,6 +2672,7 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
     ParquetFdwPlanState         fdw_private = {0};
     MemoryContext               reader_cxt;
     TupleDesc       tupleDesc = RelationGetDescr(relation);
+    Oid             relid = RelationGetRelid(relation);
     TupleTableSlot *slot;
     std::set<int>   attrs_used;
     int             cnt = 0;
@@ -2519,7 +2682,7 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
     bool            schemaless;
     std::set<std::string> slcols;
 
-    get_table_options(RelationGetRelid(relation), &fdw_private);
+    get_table_options(relid, &fdw_private);
 
     for (int i = 0; i < tupleDesc->natts; ++i)
         attrs_used.insert(i + 1 - FirstLowInvalidHeapAttributeNumber);
@@ -2544,6 +2707,7 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
                                              fdw_private.dirname,
                                              fdw_private.s3client,
                                              tupleDesc,
+                                             relid,
                                              attrs_used, std::list<SortSupportData>(),
                                              fdw_private.use_threads,
                                              false, 0, schemaless, slcols,
@@ -2581,6 +2745,11 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
                 throw Error("parquet_s3_fdw: failed to open Parquet file: %s",
                                      status.message().c_str());
             auto meta = reader->parquet_reader()->metadata();
+
+            /* Skip empty file */
+            if (meta->num_rows() == 0)
+                continue;
+
             num_rows += meta->num_rows();
 
             /* We need to scan all rowgroups */
@@ -2924,8 +3093,9 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
     bool        filename_provided = false;
     bool        func_provided = false;
 
-    /* Only check table options */
-    if (catalog != ForeignTableRelationId)
+    /* Only check table and column options */
+    if ((catalog != ForeignTableRelationId) &&
+        (catalog != AttributeRelationId))
         PG_RETURN_VOID();
 
     foreach(lc, options_list)
@@ -3065,6 +3235,25 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
         {
             /* We does not have foreign table type here, so do nothing */
         }
+        else if (strcmp(def->defname, ATTRIBUTE_OPTION_KEY) == 0)
+        {
+            /* Check that bool value is valid */
+            (void) defGetBoolean(def);
+        }
+        else if (strcmp(def->defname, ATTRIBUTE_OPTION_COLUMN_NAME) == 0)
+        {
+            /* Do nothing. */
+        }
+        else if (strcmp(def->defname, "compression_type") == 0)
+        {
+            char *type = defGetString(def);
+
+            /* Check if the compression type is supported */
+            if (!exist_in_string_list(type, ParquetCompressionTypeList))
+                ereport(ERROR,
+                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                         errmsg("parquet_s3_fdw: compression type '%s' is not supported", type)));
+        }
         else
         {
 #if PG_VERSION_NUM >= 160000
@@ -3094,7 +3283,7 @@ parquet_fdw_validator_impl(PG_FUNCTION_ARGS)
         }
     }
 
-    if (!filename_provided && !func_provided)
+    if ((catalog == ForeignTableRelationId) && !filename_provided && !func_provided)
         elog(ERROR, "parquet_s3_fdw: filename or function is required");
 
     PG_RETURN_VOID();
@@ -3592,6 +3781,13 @@ parquetAddForeignUpdateTargets(
             List               *options;
             ListCell           *option;
 
+            /*
+             * According to PostgreSQL's specification, the DROP COLUMN form does not physically remove the column,
+             * but simply makes it invisible to SQL operations, so need to ignore dropped columns.
+             */
+            if (att->attisdropped)
+                continue;
+
             /* look for the "key" option on this column */
             options = GetForeignColumnOptions(relid, attrno);
             foreach(option, options)
@@ -3757,6 +3953,13 @@ parquetPlanForeignModify(PlannerInfo *root,
         List       *options;
         ListCell   *option;
 
+        /*
+         * According to PostgreSQL's specification, the DROP COLUMN form does not physically remove the column,
+         * but simply makes it invisible to SQL operations, so need to ignore dropped columns.
+         */
+        if (att->attisdropped)
+            continue;
+
         /* look for the "key" option on this column */
         options = GetForeignColumnOptions(foreignTableId, attrno);
         foreach(option, options)
@@ -3904,12 +4107,40 @@ parquetBeginForeignModify(ModifyTableState *mtstate,
     {
         char   *attname = (char *)lfirst(lc);
 
-        sorted_cols.insert(std::string(attname));
+        if (plstate->schemaless)
+        {
+            sorted_cols.insert(std::string(attname));
+        }
+        else
+        {
+            List       *options;
+            ListCell   *lc;
+            char       *col_name = attname;
+            int         attnum = get_attnum(foreignTableId, attname);
+
+            if (attnum == InvalidAttrNumber)
+                elog(ERROR, "parquet_s3_fdw: invalid attribute name '%s'", attname);
+
+            /* If column_name option is used for the sorted column, get column name from the defined column options */
+            options = GetForeignColumnOptions(foreignTableId, attnum);
+            foreach (lc, options)
+            {
+                DefElem *def = (DefElem *)lfirst(lc);
+
+                if (strcmp(def->defname, ATTRIBUTE_OPTION_COLUMN_NAME) == 0)
+                {
+                    col_name = defGetString(def);
+                    break;
+                }
+            }
+
+            sorted_cols.insert(std::string(col_name));
+        }
     }
 
     try
     {
-        fmstate = create_parquet_modify_state(temp_cxt, plstate->dirname, plstate->s3client, tupleDesc,
+        fmstate = create_parquet_modify_state(temp_cxt, plstate->dirname, plstate->s3client, tupleDesc, foreignTableId,
                                                  target_attrs, key_attrs, junk_idx, plstate->use_threads,
                                                  plstate->use_threads, plstate->schemaless, sorted_cols);
 
@@ -4374,4 +4605,20 @@ int ExecForeignDDL(Oid serverOid,
         parquet_s3_delete_datasource(dirname, filenames, s3_client, exists_flag);
 
     return 0;
+}
+
+/*
+ * Return true if string existed in list of string
+ */
+static bool
+exist_in_string_list(char *str, const char **strlist)
+{
+	int			i;
+
+	for (i = 0; strlist[i]; i++)
+	{
+		if (pg_strcasecmp(str, strlist[i]) == 0)
+			return true;
+	}
+	return false;
 }

@@ -1498,6 +1498,217 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO tmp_schema OPTIONS (s
 --Testcase 469:
 DROP SCHEMA tmp_schema CASCADE;
 
+-- ===================================================================
+-- test compression
+-- Option a: compress with snappy
+-- Option b: compress with zstd
+-- Option c: no compression (uncompressed)
+-- Option d: retain original format
+-- ===================================================================
+\set var :PATH_FILENAME'/data/test-modify/parquet_modify/ftcomp.parquet'
+--Testcase 75:
+CREATE FOREIGN TABLE ftcomp (
+    c1 int,
+    c2 int OPTIONS (key 'true'),
+    c3 text
+) SERVER parquet_s3_srv
+OPTIONS (filename :'var');
+
+-- show information about compression through debug2
+SET client_min_messages=debug2;
+
+-- insert/update/delete data on the table, the current compression will be retained
+--Testcase 473:
+INSERT INTO ftcomp VALUES (1000, 1000, 'retain compression');
+--Testcase 474:
+UPDATE ftcomp SET c3 = 'compression retained' WHERE c2 = 1000;
+--Testcase 504:
+SELECT * FROM ftcomp;
+--Testcase 475:
+DELETE FROM ftcomp WHERE c2 = 1000;
+
+-- set compression with ZSTD at table level, the compression will be applied to all column data
+ALTER FOREIGN TABLE ftcomp OPTIONS (ADD compression_type 'ZSTD');
+--Testcase 479:
+INSERT INTO ftcomp VALUES (1000, 1000, 'apply ZSTD');
+--Testcase 480:
+UPDATE ftcomp SET c3 = 'ZSTD applied' WHERE c2 = 1000;
+--Testcase 505:
+SELECT * FROM ftcomp;
+--Testcase 481:
+DELETE FROM ftcomp WHERE c2 = 1000;
+
+-- set compression with SNAPPY at table level, the compression will be applied to all column data
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'SNAPPY');
+--Testcase 476:
+INSERT INTO ftcomp VALUES (1000, 1000, 'apply SNAPPY');
+--Testcase 477:
+UPDATE ftcomp SET c3 = 'SNAPPY applied' WHERE c2 = 1000;
+--Testcase 506:
+SELECT * FROM ftcomp;
+--Testcase 478:
+DELETE FROM ftcomp WHERE c2 = 1000;
+
+-- set no compression (uncompressed) at table level, no compression will be applied to all column data
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'UNCOMPRESSED');
+--Testcase 482:
+INSERT INTO ftcomp VALUES (1000, 1000, 'UNCOMPRESSED');
+--Testcase 483:
+UPDATE ftcomp SET c3 = 'no compression' WHERE c2 = 1000;
+--Testcase 507:
+SELECT * FROM ftcomp;
+--Testcase 484:
+DELETE FROM ftcomp WHERE c2 = 1000;
+
+-- not set compression at table level
+-- set compression 'SNAPPY' for column c2 and 'ZSTD' for column c3, column "c1" retains no compression
+ALTER FOREIGN TABLE ftcomp OPTIONS (DROP compression_type);
+ALTER FOREIGN TABLE ftcomp ALTER COLUMN c2 OPTIONS (add compression_type 'SNAPPY');
+ALTER FOREIGN TABLE ftcomp ALTER COLUMN c3 OPTIONS (add compression_type 'ZSTD');
+
+--Testcase 485:
+\dS+ ftcomp;
+--Testcase 486:
+INSERT INTO ftcomp VALUES (1000, 1000, 'test mixed compression');
+--Testcase 487:
+UPDATE ftcomp SET c3 = 'mixed compression' WHERE c2 = 1000;
+--Testcase 508:
+SELECT * FROM ftcomp;
+--Testcase 488:
+DELETE FROM ftcomp WHERE c2 = 1000;
+
+-- set compression 'SNAPPY' at table level
+-- compression 'SNAPPY' for column c2 and 'ZSTD' for column c3
+-- compression of column c1 will be 'SNAPPY' (applied through table level)
+ALTER FOREIGN TABLE ftcomp OPTIONS (ADD compression_type 'SNAPPY');
+
+--Testcase 489:
+\dS+ ftcomp;
+--Testcase 490:
+INSERT INTO ftcomp VALUES (1000, 1000, 'test mixed compression');
+--Testcase 491:
+UPDATE ftcomp SET c3 = 'mixed compression' WHERE c2 = 1000;
+--Testcase 509:
+SELECT * FROM ftcomp;
+--Testcase 492:
+DELETE FROM ftcomp WHERE c2 = 1000;
+
+-- set compression 'ZSTD' at table level
+-- compression 'SNAPPY' for column c2 and 'ZSTD' for column c3
+-- compression of column c1 will be 'ZSTD' (applied through table level)
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'ZSTD');
+
+--Testcase 493:
+\dS+ ftcomp;
+--Testcase 494:
+INSERT INTO ftcomp VALUES (1000, 1000, 'test mixed compression');
+--Testcase 495:
+UPDATE ftcomp SET c3 = 'mixed compression' WHERE c2 = 1000;
+--Testcase 510:
+SELECT * FROM ftcomp;
+--Testcase 496:
+DELETE FROM ftcomp WHERE c2 = 1000;
+
+-- set no compression 'UNCOMPRESSED' at table level
+-- compression 'SNAPPY' for column c2 and 'ZSTD' for column c3
+-- compression of column c1 will be 'UNCOMPRESSED' (applied through table level)
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'UNCOMPRESSED');
+
+--Testcase 497:
+\dS+ ftcomp;
+--Testcase 498:
+INSERT INTO ftcomp VALUES (1000, 1000, 'test mixed compression');
+--Testcase 499:
+UPDATE ftcomp SET c3 = 'mixed compression' WHERE c2 = 1000;
+--Testcase 511:
+SELECT * FROM ftcomp;
+--Testcase 500:
+DELETE FROM ftcomp WHERE c2 = 1000;
+
+-- validate options
+--Testcase 501:
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'unknown'); -- error
+--Testcase 502:
+ALTER FOREIGN TABLE ftcomp ALTER COLUMN c1 OPTIONS (ADD compression_type 'unknown'); -- error
+
+--Testcase 503:
+DROP FOREIGN TABLE ftcomp;
+SET client_min_messages=info;
+-- Test modification with case-sensitive column name
+-- ===================================================================
+\set var :PATH_FILENAME'/data/test-modify/parquet_modify_case_sensitivity/case-sensitive.parquet'
+--Testcase 512:
+CREATE FOREIGN TABLE case_sensitive (
+    id INT OPTIONS (key 'true'),
+    "UPPER" text,
+    lower text,
+    "MiXiNg" text
+) SERVER parquet_s3_srv OPTIONS (filename :'var');
+--Testcase 513:
+\dS+ case_sensitive;
+-- Select all data from table, expect correct data for all columns.
+--Testcase 514:
+SELECT * FROM case_sensitive;
+
+-- Modification with correct name, expect success
+--Testcase 515:
+INSERT INTO case_sensitive (id, "UPPER", lower, "MiXiNg") VALUES (4, 'INSERTED', 'inserted', 'InSeRtEd');
+--Testcase 516:
+SELECT * FROM case_sensitive;
+--Testcase 517:
+UPDATE case_sensitive SET "UPPER" = 'UPDATED', lower = 'updated', "MiXiNg" = 'UpDaTeD' WHERE "UPPER" = 'INSERTED' AND lower = 'inserted' AND "MiXiNg" = 'InSeRtEd';
+--Testcase 518:
+SELECT * FROM case_sensitive;
+--Testcase 519:
+DELETE FROM case_sensitive WHERE "UPPER" = 'UPDATED' AND lower = 'updated' AND "MiXiNg" = 'UpDaTeD';
+--Testcase 520:
+SELECT * FROM case_sensitive;
+
+-- Try to modify with a different case column name
+--Testcase 521:
+ALTER FOREIGN TABLE case_sensitive RENAME "UPPER" TO upper;
+--Testcase 522:
+ALTER FOREIGN TABLE case_sensitive RENAME lower TO "LOWER";
+--Testcase 523:
+ALTER FOREIGN TABLE case_sensitive RENAME "MiXiNg" TO "mIxInG";
+-- Cannot map foreign table columns and parquet columns so no suitable target file to insert.
+--Testcase 524:
+INSERT INTO case_sensitive (id, upper, "LOWER", "mIxInG") VALUES (4, 'INSERTED', 'inserted', 'InSeRtEd');
+--Testcase 525:
+SELECT * FROM case_sensitive;
+-- Cannot map foreign table columns and parquet columns, so no corresponding row are updated.
+--Testcase 526:
+UPDATE case_sensitive SET upper = 'UPDATED', "LOWER" = 'updated', "mIxInG" = 'UpDaTeD' WHERE upper = 'DATA' AND "LOWER" = 'data' AND "mIxInG" = 'dAtA';
+--Testcase 527:
+SELECT * FROM case_sensitive;
+-- Cannot map foreign table columns and parquet columns, so no corresponding row are deleted.
+--Testcase 528:
+DELETE FROM case_sensitive WHERE upper = 'DATA' AND "LOWER" = 'data' AND "mIxInG" = 'dAtA';
+--Testcase 529:
+SELECT * FROM case_sensitive;
+
+-- Use column name mapping to map column and try again, expect success
+--Testcase 530:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (ADD column_name 'UPPER'),
+                                   ALTER COLUMN "LOWER" OPTIONS (ADD column_name 'lower'),
+                                   ALTER COLUMN "mIxInG" OPTIONS (ADD column_name 'MiXiNg');
+--Testcase 531:
+INSERT INTO case_sensitive (id, upper, "LOWER", "mIxInG") VALUES (4, 'INSERTED', 'inserted', 'InSeRtEd');
+--Testcase 532:
+SELECT * FROM case_sensitive;
+--Testcase 533:
+UPDATE case_sensitive SET upper = 'UPDATED', "LOWER" = 'updated', "mIxInG" = 'UpDaTeD' WHERE upper = 'INSERTED' AND "LOWER" = 'inserted' AND "mIxInG" = 'InSeRtEd';
+--Testcase 534:
+SELECT * FROM case_sensitive;
+--Testcase 535:
+DELETE FROM case_sensitive WHERE upper = 'UPDATED' AND "LOWER" = 'updated' AND "mIxInG" = 'UpDaTeD';
+--Testcase 536:
+SELECT * FROM case_sensitive;
+
+-- clean up
+--Testcase 537:
+DROP FOREIGN TABLE case_sensitive;
+
 --CLEAN
 --Testcase 470:
 DROP USER MAPPING FOR CURRENT_USER SERVER parquet_s3_srv;

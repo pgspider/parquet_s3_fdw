@@ -1,5 +1,8 @@
+--Testcase 92:
 SET datestyle = 'ISO';
+--Testcase 93:
 SET client_min_messages = WARNING;
+--Testcase 94:
 SET log_statement TO 'none';
 --Testcase 1:
 CREATE EXTENSION parquet_s3_fdw;
@@ -8,12 +11,14 @@ DROP ROLE IF EXISTS regress_parquet_s3_fdw;
 --Testcase 3:
 CREATE ROLE regress_parquet_s3_fdw LOGIN SUPERUSER;
 
+--Testcase 95:
 SET ROLE regress_parquet_s3_fdw;
 --Testcase 4:
 CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw :USE_MINIO;
 --Testcase 5:
 CREATE USER MAPPING FOR regress_parquet_s3_fdw SERVER parquet_s3_srv :USER_PASSWORD;
 
+--Testcase 96:
 SET ROLE regress_parquet_s3_fdw;
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
 --Testcase 6:
@@ -44,6 +49,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM example1 ORDER BY one;
 EXPLAIN (COSTS OFF) SELECT * FROM example1 ORDER BY three;
 
 -- filtering
+--Testcase 97:
 SET client_min_messages = DEBUG1;
 --Testcase 12:
 SELECT * FROM example1 WHERE one < 1;
@@ -82,7 +88,30 @@ execute prep('2018-01-03');
 --Testcase 28:
 execute prep('2018-01-01');
 
+-- does not support filtering in string column (no row group skipped)
+--Testcase 227:
+SELECT * FROM example1 WHERE three = 'foo';
+--Testcase 228:
+SELECT * FROM example1 WHERE three > 'TRES';
+--Testcase 229:
+SELECT * FROM example1 WHERE three >= 'TRES';
+--Testcase 230:
+SELECT * FROM example1 WHERE three < 'BAZ';
+--Testcase 231:
+SELECT * FROM example1 WHERE three <= 'BAZ';
+--Testcase 232:
+SELECT * FROM example1 WHERE three COLLATE "C" = 'foo';
+--Testcase 233:
+SELECT * FROM example1 WHERE three COLLATE "C" > 'TRES';
+--Testcase 234:
+SELECT * FROM example1 WHERE three COLLATE "C" >= 'TRES';
+--Testcase 235:
+SELECT * FROM example1 WHERE three COLLATE "C" < 'BAZ';
+--Testcase 236:
+SELECT * FROM example1 WHERE three COLLATE "C" <= 'BAZ';
+
 -- invalid options
+--Testcase 98:
 SET client_min_messages = WARNING;
 --Testcase 29:
 CREATE FOREIGN TABLE example_fail (one INT8, two INT8[], three TEXT)
@@ -210,10 +239,26 @@ OPTIONS (filename :'var', sorted 'one', max_open_files '1');
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted_caching ORDER BY one;
 --Testcase 54:
 SELECT * FROM example_sorted_caching ORDER BY one;
+-- test multiple columns of foreign table map to the same column of parquet file when caching
+-- multifile merge reader
+--Testcase 157:
+ALTER FOREIGN TABLE example_sorted_caching ADD COLUMN eight INT8 OPTIONS (column_name 'one');
+--Testcase 158:
+\dS+ example_sorted_caching;
+--Testcase 159:
+EXPLAIN (COSTS OFF) SELECT * FROM example_sorted_caching ORDER BY one;;
+--Testcase 160:
+SELECT * FROM example_sorted_caching ORDER BY one;; -- one and eight are both mapped to 'one' column in the data file
+-- revert back
+--Testcase 161:
+ALTER FOREIGN TABLE example_sorted_caching DROP COLUMN eight;
 
 -- parallel execution
+--Testcase 99:
 SET parallel_setup_cost = 0;
+--Testcase 100:
 SET parallel_tuple_cost = 0.001;
+--Testcase 73:
 EXPLAIN (COSTS OFF) SELECT * FROM example_seq;
 --Testcase 56:
 EXPLAIN (COSTS OFF) SELECT * FROM example_seq ORDER BY one;
@@ -225,7 +270,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM example_sorted;
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY one;
 --Testcase 60:
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY two;
+--Testcase 101:
 ALTER FOREIGN TABLE example_sorted OPTIONS (ADD files_in_order 'true');
+--Testcase 74:
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY one;
 --Testcase 61:
 EXPLAIN (COSTS OFF) SELECT * FROM example1;
@@ -251,6 +298,7 @@ SELECT * FROM example_multisort ORDER BY one, five;
 
 -- maps
 \set var :PATH_FILENAME'/data/complex/example3.parquet'
+--Testcase 102:
 SET client_min_messages = DEBUG1;
 --Testcase 66:
 CREATE FOREIGN TABLE example3 (
@@ -268,7 +316,236 @@ SELECT * FROM example3 WHERE three = 3;
 -- analyze
 ANALYZE example_sorted;
 
+--Testcase 103:
 SET client_min_messages = WARNING;
+
+-- ===================================================================
+-- test column options
+-- ===================================================================
+\set var :PATH_FILENAME'/data/column_name/ftcol.parquet'
+--Testcase 104:
+CREATE FOREIGN TABLE ftcol (
+    c1     INT8,
+    c2     INT8,
+    c3     TEXT)
+SERVER parquet_s3_srv
+OPTIONS (filename :'var', sorted 'c1');
+
+--Testcase 105:
+EXPLAIN (COSTS OFF) SELECT * FROM ftcol;
+--Testcase 106:
+SELECT * FROM ftcol; -- c1 is blank
+
+-- test adding wrong column option name
+--Testcase 107:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (wrong_column_name 'C 1'); -- error
+
+-- test adding correct column_name option
+--Testcase 108:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (column_name 'C 1');
+--Testcase 109:
+\dS+ ftcol;
+
+-- test data is displayed after remapping
+--Testcase 110:
+EXPLAIN (COSTS OFF) SELECT * FROM ftcol;
+--Testcase 111:
+SELECT * FROM ftcol; -- c1 is mapped to 'C 1' in the data file
+
+-- test multiple columns of foreign table map to the same column of parquet file
+--Testcase 162:
+ALTER FOREIGN TABLE ftcol ADD COLUMN c4 INT8 OPTIONS (column_name 'C 1');
+--Testcase 163:
+\dS+ ftcol;
+--Testcase 164:
+EXPLAIN (COSTS OFF) SELECT * FROM ftcol;
+--Testcase 165:
+SELECT * FROM ftcol; -- c1 and c4 are both mapped to 'C 1' column in the data file
+-- revert back
+--Testcase 166:
+ALTER FOREIGN TABLE ftcol DROP COLUMN c4;
+
+-- test sorted column
+--Testcase 112:
+INSERT INTO ftcol VALUES (0, 4, 'foo'); -- auto sorted without ORDER BY clause
+--Testcase 113:
+SELECT * FROM ftcol;
+
+-- test sorted column with ORDER BY
+--Testcase 114:
+EXPLAIN (COSTS OFF)
+SELECT * FROM ftcol ORDER BY c1;
+--Testcase 115:
+SELECT * FROM ftcol ORDER BY c1;
+
+-- test change column mapping, column name is case-sensitive
+--Testcase 116:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (drop column_name);
+--Testcase 117:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (column_name 'C2');
+--Testcase 118:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c2 OPTIONS (column_name 'c 1');
+--Testcase 119:
+SELECT * FROM ftcol; -- c1 and c2 are emtpy
+--Testcase 277:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c1 OPTIONS (SET column_name 'c2');
+--Testcase 278:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c2 OPTIONS (SET column_name 'C 1');
+--Testcase 279:
+SELECT * FROM ftcol; -- c1 and c2 are swapped out
+
+-- test if column in the data file is not existed, empty result
+--Testcase 120:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c3 OPTIONS (column_name 'c10');
+--Testcase 121:
+SELECT * FROM ftcol; -- c3 column empty
+--Testcase 122:
+INSERT INTO ftcol VALUES (5, 6, 'foobaz'); -- error
+--Testcase 123:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c3 OPTIONS (drop column_name);
+
+-- test scanning with mapping column in WHERE clause
+--Testcase 124:
+SELECT * FROM ftcol;
+--Testcase 125:
+SELECT * FROM ftcol WHERE c2 = 0;
+
+-- test key column option
+--Testcase 126:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c2 OPTIONS (key 'no such value'); -- ERROR
+--Testcase 127:
+ALTER FOREIGN TABLE ftcol ALTER COLUMN c2 OPTIONS (key 'true'); -- OK
+
+-- test deleting with mapping column in WHERE clause
+--Testcase 128:
+DELETE FROM ftcol WHERE c2 = 0;
+--Testcase 129:
+SELECT * FROM ftcol;
+
+-- test updating with mapping column in WHERE clause
+--Testcase 130:
+UPDATE ftcol SET c1 = 10 WHERE c2 = 1;
+--Testcase 131:
+SELECT * FROM ftcol;
+-- reset table value for next test
+--Testcase 132:
+UPDATE ftcol SET c1 = 1 WHERE c2 = 1;
+
+-- test with row group filter
+--Testcase 133:
+SET client_min_messages = DEBUG1;
+--Testcase 134:
+SELECT * FROM example1;
+
+--Testcase 135:
+ALTER FOREIGN TABLE example1 RENAME COLUMN one TO new_one;
+--Testcase 136:
+ALTER FOREIGN TABLE example1 OPTIONS (SET sorted 'new_one');
+--Testcase 137:
+SELECT * FROM example1;
+
+--Testcase 138:
+ALTER FOREIGN TABLE example1 ALTER COLUMN new_one OPTIONS (column_name 'one');
+--Testcase 139:
+SELECT * FROM example1;
+--Testcase 140:
+SELECT * FROM example1 WHERE new_one < 1;
+--Testcase 141:
+SELECT * FROM example1 WHERE new_one <= 1;
+--Testcase 142:
+SELECT * FROM example1 WHERE new_one > 6;
+--Testcase 143:
+SELECT * FROM example1 WHERE new_one >= 6;
+--Testcase 144:
+SELECT * FROM example1 WHERE new_one = 2;
+--Testcase 145:
+SELECT * FROM example1 WHERE new_one = 7;
+-- Clean-up
+--Testcase 146:
+DROP FOREIGN TABLE ftcol;
+--Testcase 147:
+SET client_min_messages = WARNING;
+
+-- test ignoring dropped columns when inserting/deleting data
+--Testcase 148:
+ALTER FOREIGN TABLE example_multisort ALTER COLUMN one OPTIONS (key 'true');
+--Testcase 83:
+\dS+ example_multisort;
+
+--Testcase 84:
+DELETE FROM example_multisort; -- OK
+--Testcase 85:
+INSERT INTO example_multisort VALUES(7, '{19,20,21}' , 'seven' , '2018-01-07 00:00:00.00001' , '2018-01-07' , false); -- OK
+--Testcase 86:
+SELECT * FROM example_multisort;
+
+--Testcase 149:
+ALTER FOREIGN TABLE example_multisort DROP COLUMN one;
+--Testcase 87:
+\dS+ example_multisort;
+--Testcase 150:
+ALTER FOREIGN TABLE example_multisort ADD COLUMN one INT8 OPTIONS (key 'true');
+--Testcase 88:
+\dS+ example_multisort;
+
+--Testcase 89:
+DELETE FROM example_multisort; -- OK
+-- need to specify columns because the column order is changed
+--Testcase 90:
+INSERT INTO example_multisort(one, two, three, four, five, six) VALUES  (7, '{19,20,21}', 'seven' , '2018-01-07 00:00:00.00001' , '2018-01-07' , false); -- OK
+--Testcase 91:
+SELECT * FROM example_multisort;
+-- ===================================================================
+-- test 'sorted' option
+-- ===================================================================
+\set var :PATH_FILENAME'/data/column_name/ftcol.parquet'
+--Testcase 75:
+CREATE FOREIGN TABLE ftcol (
+    "C 1" int,
+    c2 int,
+    c3 text
+) SERVER parquet_s3_srv
+OPTIONS (filename :'var', sorted '"C 1"');
+
+-- test sorted option with a column name has space character and is double quoted
+--Testcase 76:
+\dS+ ftcol;
+--Testcase 77:
+SELECT * FROM ftcol;
+
+-- test sorted option with a list of column name separated by a space character
+-- if a column name has space character, it must be double quoted.
+--Testcase 151:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted '"C 1" c2');
+--Testcase 78:
+SELECT * FROM ftcol;
+
+-- test sorted option with a column name has space character but not double quoted
+--Testcase 152:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted 'C 1 c2');
+--Testcase 79:
+SELECT * FROM ftcol; -- error
+
+-- test sorted option with a column name has space character but missing a double quote
+--Testcase 153:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted '"C 1 c2');
+--Testcase 80:
+SELECT * FROM ftcol; -- error
+
+-- test sorted option with a list of column name but not separated by space character
+--Testcase 154:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted '"C 1", c2');
+--Testcase 81:
+SELECT * FROM ftcol; -- error
+
+-- reset sorted option to the default value
+--Testcase 155:
+ALTER FOREIGN TABLE ftcol OPTIONS (set sorted '"C 1"');
+--Testcase 82:
+SELECT * FROM ftcol;
+-- Clean-up
+--Testcase 156:
+DROP FOREIGN TABLE ftcol;
 
 --get version
 --Testcase 69:
@@ -277,6 +554,406 @@ SET client_min_messages = WARNING;
 SELECT * FROM public.parquet_s3_fdw_version();
 --Testcase 71:
 SELECT parquet_s3_fdw_version();
+
+--Testcase 73:
+DROP FOREIGN TABLE example1;
+
+-- ====================================================================
+-- Check that userid to use when querying the remote table is correctly
+-- propagated into foreign rels.
+-- In local test parquet file, the query will still success because it
+-- does not use a connection.
+-- ====================================================================
+-- create empty_owner without access information to detect incorrect UserID.
+--Testcase 167:
+CREATE ROLE empty_owner LOGIN SUPERUSER;
+--Testcase 168:
+SET ROLE empty_owner;
+
+\set var :PATH_FILENAME'/data/simple/example1.parquet'
+
+--Testcase 169:
+CREATE FOREIGN TABLE example1 (
+    one     INT8 OPTIONS (key 'true'),
+    two     INT8[],
+    three   TEXT,
+    four    TIMESTAMP,
+    five    DATE,
+    six     BOOL,
+    seven   FLOAT8)
+SERVER parquet_s3_srv
+OPTIONS (filename :'var', sorted 'one');
+
+--Testcase 170:
+CREATE VIEW v4 AS SELECT * FROM example1;
+
+-- If undefine user owner, postgres core defaults to using the current user to query.
+-- For Foreign Scan, Foreign Modify.
+--Testcase 171:
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM v4;
+--Testcase 172:
+INSERT INTO v4 VALUES (7, '{20,21,22}', 'view', '2023-01-01', '2023-01-01', 'true', 2);
+--Testcase 173:
+UPDATE v4 SET three = 'update';
+--Testcase 174:
+DELETE FROM v4;
+
+-- For Import Foreign Schema, postgres fixed using current user.
+--Testcase 175:
+CREATE SCHEMA s_test;
+
+\set var '\"':PATH_FILENAME'\/ported_postgres\"'
+IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO s_test OPTIONS (sorted 'c1');
+
+--Testcase 176:
+CREATE FUNCTION list_parquet_s3_files(args jsonb)
+RETURNS text[] as
+$$
+    SELECT array_agg(args->>'dir' || filename)
+    FROM (VALUES
+        ('/example1.parquet', 'simple'),
+        ('/example2.parquet', 'simple'),
+        ('/example3.parquet', 'complex')
+    ) AS files(filename, filetype)
+    WHERE filetype = args->>'type';
+$$
+LANGUAGE SQL;
+
+\set var  '{"dir": "':PATH_FILENAME'/data/simple", "type": "simple"}'
+--Testcase 177:
+SELECT import_parquet_s3(
+    'example_import',
+    's_test',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one"}');
+
+--Testcase 178:
+DROP FUNCTION list_parquet_s3_files;
+
+--Testcase 179:
+DROP SCHEMA s_test CASCADE;
+
+-- For Acquire Sample Rows
+ANALYZE example1;
+
+--Testcase 180:
+CREATE ROLE regress_view_owner_another;
+--Testcase 181:
+ALTER VIEW v4 OWNER TO regress_view_owner_another;
+--Testcase 182:
+ALTER FOREIGN TABLE example1 OWNER TO regress_view_owner_another;
+GRANT SELECT ON example1 TO regress_view_owner_another;
+GRANT INSERT ON example1 TO regress_view_owner_another;
+GRANT UPDATE ON example1 TO regress_view_owner_another;
+GRANT DELETE ON example1 TO regress_view_owner_another;
+
+-- It fails as expected due to the lack of a user mapping for that user.
+-- For Foreign Scan, Foreign Modify.
+--Testcase 183:
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM v4;
+--Testcase 184:
+INSERT INTO v4 VALUES (7, '{20,21,22}', 'view', '2023-01-01', '2023-01-01', 'true', 2);
+--Testcase 185:
+UPDATE v4 SET three = 'update';
+--Testcase 186:
+DELETE FROM v4;
+
+-- For Import Foreign Schema, postgres fixed using current user.
+--Testcase 187:
+CREATE SCHEMA s_test;
+\set var '\"':PATH_FILENAME'\/ported_postgres\"'
+IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO s_test OPTIONS (sorted 'c1');
+
+--Testcase 188:
+CREATE FUNCTION list_parquet_s3_files(args jsonb)
+RETURNS text[] as
+$$
+    SELECT array_agg(args->>'dir' || filename)
+    FROM (VALUES
+        ('/example1.parquet', 'simple'),
+        ('/example2.parquet', 'simple'),
+        ('/example3.parquet', 'complex')
+    ) AS files(filename, filetype)
+    WHERE filetype = args->>'type';
+$$
+LANGUAGE SQL;
+
+\set var  '{"dir": "':PATH_FILENAME'/data/simple", "type": "simple"}'
+--Testcase 189:
+SELECT import_parquet_s3(
+    'example_import',
+    's_test',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one"}');
+
+--Testcase 190:
+DROP FUNCTION list_parquet_s3_files;
+--Testcase 191:
+DROP SCHEMA s_test CASCADE;
+
+-- For Acquire Sample Rows
+ANALYZE example1;
+
+-- Identify the correct user, but it fails due to the lack access informations.
+--Testcase 192:
+CREATE USER MAPPING FOR regress_view_owner_another SERVER parquet_s3_srv;
+-- For Foreign Scan, Foreign Modify.
+--Testcase 193:
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM v4;
+--Testcase 194:
+INSERT INTO v4 VALUES (7, '{20,21,22}', 'view', '2023-01-01', '2023-01-01', 'true', 2);
+--Testcase 195:
+UPDATE v4 SET three = 'update';
+--Testcase 196:
+DELETE FROM v4;
+
+-- For Import Foreign Schema, postgres fixed using current user.
+--Testcase 197:
+CREATE SCHEMA s_test;
+\set var '\"':PATH_FILENAME'\/ported_postgres\"'
+IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO s_test OPTIONS (sorted 'c1');
+
+--Testcase 198:
+CREATE FUNCTION list_parquet_s3_files(args jsonb)
+RETURNS text[] as
+$$
+    SELECT array_agg(args->>'dir' || filename)
+    FROM (VALUES
+        ('/example1.parquet', 'simple'),
+        ('/example2.parquet', 'simple'),
+        ('/example3.parquet', 'complex')
+    ) AS files(filename, filetype)
+    WHERE filetype = args->>'type';
+$$
+LANGUAGE SQL;
+
+\set var  '{"dir": "':PATH_FILENAME'/data/simple", "type": "simple"}'
+--Testcase 199:
+SELECT import_parquet_s3(
+    'example_import',
+    's_test',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one"}');
+
+--Testcase 200:
+DROP FUNCTION list_parquet_s3_files;
+--Testcase 201:
+DROP SCHEMA s_test CASCADE;
+
+-- For Acquire Sample Rows
+ANALYZE example1;
+
+--Testcase 202:
+DROP USER MAPPING FOR regress_view_owner_another SERVER parquet_s3_srv;
+
+-- Should not get that error once a user mapping is created and have enough information.
+--Testcase 203:
+CREATE USER MAPPING FOR regress_view_owner_another SERVER parquet_s3_srv :USER_PASSWORD;
+-- For Foreign Scan, Foreign Modify.
+--Testcase 204:
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM v4;
+--Testcase 205:
+INSERT INTO v4 VALUES (7, '{20,21,22}', 'view', '2023-01-01', '2023-01-01', 'true', 2);
+-- Insert 1 more row to avoid ANALYZE empty table issue.
+--Testcase 206:
+INSERT INTO v4 VALUES (8, '{20,21,22}', 'view', '2023-01-01', '2023-01-01', 'true', 2);
+--Testcase 207:
+UPDATE v4 SET three = 'update';
+--Testcase 208:
+DELETE FROM v4 WHERE one = 7;
+
+-- For Import Foreign Schema, postgres fixed using current user.
+--Testcase 209:
+CREATE SCHEMA s_test;
+\set var '\"':PATH_FILENAME'\/ported_postgres\"'
+IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO s_test OPTIONS (sorted 'c1');
+--Testcase 210:
+DROP SCHEMA s_test CASCADE;
+
+--Testcase 211:
+CREATE FUNCTION list_parquet_s3_files(args jsonb)
+RETURNS text[] as
+$$
+    SELECT array_agg(args->>'dir' || filename)
+    FROM (VALUES
+        ('/example1.parquet', 'simple'),
+        ('/example2.parquet', 'simple'),
+        ('/example3.parquet', 'complex')
+    ) AS files(filename, filetype)
+    WHERE filetype = args->>'type';
+$$
+LANGUAGE SQL;
+
+--Testcase 212:
+CREATE SCHEMA s_test;
+\set var  '{"dir": "':PATH_FILENAME'/data/simple", "type": "simple"}'
+--Testcase 213:
+SELECT import_parquet_s3(
+    'example_import',
+    's_test',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one"}');
+
+--Testcase 214:
+DROP FUNCTION list_parquet_s3_files;
+--Testcase 215:
+DROP SCHEMA s_test CASCADE;
+
+-- For Acquire Sample Rows
+ANALYZE example1;
+
+-- Test analyze empty table
+--Testcase 223:
+SET ROLE regress_parquet_s3_fdw;
+--Testcase 224:
+DELETE FROM example1;
+--Testcase 225:
+SELECT * FROM example1;
+--Testcase 226:
+ANALYZE example1;
+
+-- Clean
+--Testcase 216:
+DROP VIEW v4;
+--Testcase 217:
+DROP USER MAPPING FOR regress_view_owner_another SERVER parquet_s3_srv;
+--Testcase 218:
+DROP OWNED BY regress_view_owner_another;
+--Testcase 219:
+DROP OWNED BY empty_owner;
+--Testcase 220:
+DROP ROLE regress_view_owner_another;
+-- current user cannot be dropped
+--Testcase 221:
+SET ROLE regress_parquet_s3_fdw;
+--Testcase 222:
+DROP ROLE empty_owner;
+
+--Testcase 237:
+RESET parallel_setup_cost;
+--Testcase 238:
+RESET parallel_tuple_cost;
+-- ===================================================================
+-- test case-sensitive column name
+-- ===================================================================
+\set var :PATH_FILENAME'/data/column_name/case-sensitive.parquet'
+--Testcase 239:
+CREATE FOREIGN TABLE case_sensitive (
+    "UPPER" text,
+    lower text,
+    "MiXiNg" text
+) SERVER parquet_s3_srv
+OPTIONS (filename :'var');
+
+--Testcase 240:
+\dS+ case_sensitive;
+-- Select all data from table, expect correct data for all columns.
+--Testcase 241:
+SELECT * FROM case_sensitive;
+
+-- Add some new case-sensitive columns which does not exist in parquet file,
+-- expect NULL data for that column.
+--Testcase 242:
+ALTER FOREIGN TABLE case_sensitive ADD COLUMN upper text, ADD COLUMN "LOWER" text, ADD COLUMN "mIxInG" text;
+--Testcase 243:
+\dS+ case_sensitive;
+--Testcase 244:
+SELECT * FROM case_sensitive;
+
+-- Test column name mapping feature with case-sensitive columns.
+-- 2 columns "UPPER", "upper" of the foreign table map to column "UPPER" of parquet file.
+-- 2 columns "lower", "LOWER" of the foreign table map to column "LOWER" of parquet file.
+-- 2 columns "MiXiNg", "mIxInG" of the foreign table map to column "MiXiNg" of parquet file.
+--Testcase 245:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (ADD column_name 'UPPER');
+--Testcase 246:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "LOWER" OPTIONS (ADD column_name 'lower');
+--Testcase 247:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "mIxInG" OPTIONS (ADD column_name 'MiXiNg');
+--Testcase 248:
+\dS+ case_sensitive;
+--Testcase 249:
+SELECT * FROM case_sensitive;
+
+-- Test sorted option with case-sensitive columns
+--Testcase 250:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (DROP column_name);
+--Testcase 251:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "LOWER" OPTIONS (DROP column_name);
+--Testcase 252:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "mIxInG" OPTIONS (DROP column_name);
+-- Single sorting key
+--Testcase 253:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (ADD sorted '"UPPER"');
+--Testcase 254:
+\dS+ case_sensitive;
+--Testcase 255:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "UPPER";
+--Testcase 256:
+SELECT * FROM case_sensitive ORDER BY "UPPER";
+-- Try to ORDER BY non-sorted column
+--Testcase 257:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "MiXiNg";
+--Testcase 258:
+SELECT * FROM case_sensitive ORDER BY "MiXiNg";
+-- Multiple sorting key
+--Testcase 259:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted '"UPPER" lower "MiXiNg"');
+--Testcase 260:
+\dS+ case_sensitive;
+--Testcase 261:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "UPPER", lower, "MiXiNg";
+--Testcase 262:
+SELECT * FROM case_sensitive ORDER BY "UPPER", lower, "MiXiNg";
+
+-- Combine column name mapping feature with sorted options for case-sensitive columns
+--Testcase 263:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (ADD column_name 'UPPER');
+--Testcase 264:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "LOWER" OPTIONS (ADD column_name 'lower');
+--Testcase 265:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "mIxInG" OPTIONS (ADD column_name 'MiXiNg');
+-- Single sorting key
+--Testcase 266:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted 'upper');
+--Testcase 267:
+\dS+ case_sensitive;
+--Testcase 268:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY upper;
+--Testcase 269:
+SELECT * FROM case_sensitive ORDER BY upper;
+-- Try to ORDER BY non-sorted column
+--Testcase 270:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "mIxInG";
+--Testcase 271:
+SELECT * FROM case_sensitive ORDER BY "mIxInG";
+-- Multiple sorting key
+--Testcase 272:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted 'upper "LOWER" "mIxInG"');
+--Testcase 273:
+\dS+ case_sensitive;
+--Testcase 274:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY upper, "LOWER", "mIxInG";
+--Testcase 275:
+SELECT * FROM case_sensitive ORDER BY upper, "LOWER", "mIxInG";
+
+-- Clean-up
+--Testcase 276:
+DROP FOREIGN TABLE case_sensitive;
 
 --Testcase 72:
 DROP EXTENSION parquet_s3_fdw CASCADE;

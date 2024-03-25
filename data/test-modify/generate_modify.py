@@ -295,3 +295,34 @@ df_sorted_time = pd.DataFrame({'c1': [0], 'c2': [datetime(2018, 1, 1)]})
 table_sorted_time = pa.Table.from_pandas(df_sorted_time, schema_s3)
 with pq.ParquetWriter('./parquet_modify_6/ft_sorted_time.parquet', table_sorted_time.schema) as writer:
     writer.write_table(table_sorted_time)
+
+# init data for compression
+df = pd.DataFrame({'c1': [1, 2, 3],
+                    'c2': [1, 2, 3],
+                    'c3': ['foo', 'bar', 'baz']})
+table = pa.Table.from_pandas(df)
+
+with pq.ParquetWriter('./parquet_modify/ftcomp.parquet', table.schema) as writer:
+# case-sensive column name
+# df = pd.DataFrame({ 'id': [1,2,3],
+#                     'UPPER': ['UPPER', 'CASE', 'DATA'],
+#                     'lower': ['LOWER', 'CASE', 'DATA'],
+#                     'MiXiNg': ['MixinG', 'CaSe', 'dAtA']})
+# table = pa.Table.from_pandas(df)
+
+# with pq.ParquetWriter('./parquet_modify_case_sensitivity/case-sensitive.parquet', table.schema) as writer:
+#     writer.write_table(table)
+    
+schema_case_sensitive = pa.schema([
+    pa.field('id', pa.int32()),
+    pa.field('UPPER', pa.string()),
+    pa.field('lower', pa.string()),
+    pa.field('MiXiNg', pa.string()),
+])
+df = pd.DataFrame({ 'id': [1,2,3],
+                    'UPPER': ['UPPER', 'CASE', 'DATA'],
+                    'lower': ['lower', 'case', 'data'],
+                    'MiXiNg': ['MixinG', 'CaSe', 'dAtA']})
+table = pa.Table.from_pandas(df, schema_case_sensitive)
+with pq.ParquetWriter('./parquet_modify_case_sensitivity/case-sensitive.parquet', table.schema) as writer:
+    writer.write_table(table)

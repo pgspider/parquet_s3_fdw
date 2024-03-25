@@ -39,6 +39,8 @@ private:
     Aws::S3::S3Client  *s3_client;
     /* foreign table desc */
     TupleDesc           tuple_desc;
+    /* relation oid */
+    Oid                 relid;
     /* list attnum of needed modify attributes */
     std::set<int>       target_attrs;
     /* list column key names */
@@ -69,6 +71,7 @@ public:
                             const char *dirname,
                             Aws::S3::S3Client *s3_client,
                             TupleDesc tuple_desc,
+                            Oid relid,
                             std::set<int> target_attrs,
                             std::set<std::string> key_attrs,
                             AttrNumber *junk_idx,
@@ -105,6 +108,7 @@ ParquetS3FdwModifyState *create_parquet_modify_state(MemoryContext reader_cxt,
                                                      const char *dirname,
                                                      Aws::S3::S3Client *s3_client,
                                                      TupleDesc tuple_desc,
+                                                     Oid relid,
                                                      std::set<int> target_attrs,
                                                      std::set<std::string> key_attrs,
                                                      AttrNumber *junk_idx,
