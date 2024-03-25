@@ -1,8 +1,11 @@
 \set ECHO none
 show server_version \gset
 \ir sql/:server_version/schemaless/parquet_s3_fdw.sql
+--Testcase 74:
 SET datestyle = 'ISO';
+--Testcase 75:
 SET client_min_messages = WARNING;
+--Testcase 76:
 SET log_statement TO 'none';
 --Testcase 1:
 CREATE EXTENSION parquet_s3_fdw;
@@ -10,11 +13,13 @@ CREATE EXTENSION parquet_s3_fdw;
 DROP ROLE IF EXISTS regress_parquet_s3_fdw;
 --Testcase 3:
 CREATE ROLE regress_parquet_s3_fdw LOGIN SUPERUSER;
+--Testcase 77:
 SET ROLE regress_parquet_s3_fdw;
 --Testcase 4:
 CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw :USE_MINIO;
 --Testcase 5:
 CREATE USER MAPPING FOR regress_parquet_s3_fdw SERVER parquet_s3_srv :USER_PASSWORD;
+--Testcase 78:
 SET ROLE regress_parquet_s3_fdw;
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
 --Testcase 6:
@@ -76,18 +81,19 @@ EXPLAIN (COSTS OFF) SELECT * FROM example1 ORDER BY (v->>'three')::text;
 (5 rows)
 
 -- filtering
+--Testcase 79:
 SET client_min_messages = DEBUG1;
 --Testcase 12:
 SELECT * FROM example1 WHERE (v->>'one')::bigint < 1;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:43: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:43: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  v 
 ---
 (0 rows)
 
 --Testcase 13:
 SELECT * FROM example1 WHERE (v->>'one')::bigint <= 1;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:45: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:51: DEBUG:  parquet_s3_fdw: skip rowgroup 2
                                                               v                                                              
 -----------------------------------------------------------------------------------------------------------------------------
  {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
@@ -95,15 +101,15 @@ psql:sql/16.0/schemaless/parquet_s3_fdw.sql:45: DEBUG:  parquet_s3_fdw: skip row
 
 --Testcase 14:
 SELECT * FROM example1 WHERE (v->>'one')::bigint > 6;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:47: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:47: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  v 
 ---
 (0 rows)
 
 --Testcase 15:
 SELECT * FROM example1 WHERE (v->>'one')::bigint >= 6;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:55: DEBUG:  parquet_s3_fdw: skip rowgroup 1
                                                                   v                                                                  
 -------------------------------------------------------------------------------------------------------------------------------------
  {"one": 6, "six": "f", "two": [16, 17, 18], "five": "2018-01-06", "four": "2018-01-06 00:00:00.00001", "seven": 2, "three": "tres"}
@@ -111,7 +117,7 @@ psql:sql/16.0/schemaless/parquet_s3_fdw.sql:49: DEBUG:  parquet_s3_fdw: skip row
 
 --Testcase 16:
 SELECT * FROM example1 WHERE (v->>'one')::bigint = 2;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:51: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:57: DEBUG:  parquet_s3_fdw: skip rowgroup 2
                                                                 v                                                                
 ---------------------------------------------------------------------------------------------------------------------------------
  {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
@@ -119,15 +125,15 @@ psql:sql/16.0/schemaless/parquet_s3_fdw.sql:51: DEBUG:  parquet_s3_fdw: skip row
 
 --Testcase 17:
 SELECT * FROM example1 WHERE (v->>'one')::bigint = 7;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:53: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 2
  v 
 ---
 (0 rows)
 
 --Testcase 18:
 SELECT * FROM example1 WHERE (v->>'six')::boolean = true;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:55: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:61: DEBUG:  parquet_s3_fdw: skip rowgroup 2
                                                               v                                                              
 -----------------------------------------------------------------------------------------------------------------------------
  {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
@@ -146,7 +152,7 @@ SELECT * FROM example1 WHERE (v->>'six')::boolean = false;
 
 --Testcase 20:
 SELECT * FROM example1 WHERE (v->>'seven')::float8 < 1.5;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:59: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:65: DEBUG:  parquet_s3_fdw: skip rowgroup 2
                                                               v                                                              
 -----------------------------------------------------------------------------------------------------------------------------
  {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
@@ -164,7 +170,7 @@ SELECT * FROM example1 WHERE (v->>'seven')::float8 <= 1.5;
 
 --Testcase 22:
 SELECT * FROM example1 WHERE (v->>'seven')::float8 = 1.5;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:63: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:69: DEBUG:  parquet_s3_fdw: skip rowgroup 1
                                                                v                                                                
 --------------------------------------------------------------------------------------------------------------------------------
  {"one": 4, "six": "f", "two": [10, 11, 12], "five": "2018-01-04", "four": "2018-01-04 00:00:10", "seven": 1.5, "three": "uno"}
@@ -172,7 +178,7 @@ psql:sql/16.0/schemaless/parquet_s3_fdw.sql:63: DEBUG:  parquet_s3_fdw: skip row
 
 --Testcase 23:
 SELECT * FROM example1 WHERE (v->>'seven')::float8 > 1;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:65: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:71: DEBUG:  parquet_s3_fdw: skip rowgroup 1
                                                                   v                                                                  
 -------------------------------------------------------------------------------------------------------------------------------------
  {"one": 4, "six": "f", "two": [10, 11, 12], "five": "2018-01-04", "four": "2018-01-04 00:00:10", "seven": 1.5, "three": "uno"}
@@ -201,7 +207,7 @@ SELECT * FROM example1 WHERE (v->>'seven')::float8 IS NULL;
 prepare prep(date) as select * from example1 where (v->>'five')::date < $1;
 --Testcase 27:
 execute prep('2018-01-03');
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:75: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:81: DEBUG:  parquet_s3_fdw: skip rowgroup 2
                                                                 v                                                                
 ---------------------------------------------------------------------------------------------------------------------------------
  {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
@@ -210,29 +216,111 @@ psql:sql/16.0/schemaless/parquet_s3_fdw.sql:75: DEBUG:  parquet_s3_fdw: skip row
 
 --Testcase 28:
 execute prep('2018-01-01');
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:77: DEBUG:  parquet_s3_fdw: skip rowgroup 1
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:77: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:83: DEBUG:  parquet_s3_fdw: skip rowgroup 2
+ v 
+---
+(0 rows)
+
+-- does not support filtering in string column (no row group skipped)
+--Testcase 143:
+SELECT * FROM example1 WHERE (v->>'three')::text = 'foo';
+                                                              v                                                              
+-----------------------------------------------------------------------------------------------------------------------------
+ {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
+(1 row)
+
+--Testcase 144:
+SELECT * FROM example1 WHERE (v->>'three')::text > 'TRES';
+                                                               v                                                                
+--------------------------------------------------------------------------------------------------------------------------------
+ {"one": 4, "six": "f", "two": [10, 11, 12], "five": "2018-01-04", "four": "2018-01-04 00:00:10", "seven": 1.5, "three": "uno"}
+(1 row)
+
+--Testcase 145:
+SELECT * FROM example1 WHERE (v->>'three')::text >= 'TRES';
+                                                               v                                                                
+--------------------------------------------------------------------------------------------------------------------------------
+ {"one": 4, "six": "f", "two": [10, 11, 12], "five": "2018-01-04", "four": "2018-01-04 00:00:10", "seven": 1.5, "three": "uno"}
+(1 row)
+
+--Testcase 146:
+SELECT * FROM example1 WHERE (v->>'three')::text < 'BAZ';
+                                                                v                                                                
+---------------------------------------------------------------------------------------------------------------------------------
+ {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
+ {"one": 3, "six": "t", "two": [7, 8, 9], "five": "2018-01-03", "four": "2018-01-03 00:00:00", "seven": 1, "three": "baz"}
+(2 rows)
+
+--Testcase 147:
+SELECT * FROM example1 WHERE (v->>'three')::text <= 'BAZ';
+                                                                v                                                                
+---------------------------------------------------------------------------------------------------------------------------------
+ {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
+ {"one": 3, "six": "t", "two": [7, 8, 9], "five": "2018-01-03", "four": "2018-01-03 00:00:00", "seven": 1, "three": "baz"}
+(2 rows)
+
+--Testcase 148:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" = 'foo';
+                                                              v                                                              
+-----------------------------------------------------------------------------------------------------------------------------
+ {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
+(1 row)
+
+--Testcase 149:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" > 'TRES';
+                                                                  v                                                                  
+-------------------------------------------------------------------------------------------------------------------------------------
+ {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
+ {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
+ {"one": 3, "six": "t", "two": [7, 8, 9], "five": "2018-01-03", "four": "2018-01-03 00:00:00", "seven": 1, "three": "baz"}
+ {"one": 4, "six": "f", "two": [10, 11, 12], "five": "2018-01-04", "four": "2018-01-04 00:00:10", "seven": 1.5, "three": "uno"}
+ {"one": 5, "six": "f", "two": [13, 14, 15], "five": "2018-01-05", "four": "2018-01-05 00:00:00.01", "seven": null, "three": "dos"}
+ {"one": 6, "six": "f", "two": [16, 17, 18], "five": "2018-01-06", "four": "2018-01-06 00:00:00.00001", "seven": 2, "three": "tres"}
+(6 rows)
+
+--Testcase 150:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" >= 'TRES';
+                                                                  v                                                                  
+-------------------------------------------------------------------------------------------------------------------------------------
+ {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
+ {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
+ {"one": 3, "six": "t", "two": [7, 8, 9], "five": "2018-01-03", "four": "2018-01-03 00:00:00", "seven": 1, "three": "baz"}
+ {"one": 4, "six": "f", "two": [10, 11, 12], "five": "2018-01-04", "four": "2018-01-04 00:00:10", "seven": 1.5, "three": "uno"}
+ {"one": 5, "six": "f", "two": [13, 14, 15], "five": "2018-01-05", "four": "2018-01-05 00:00:00.01", "seven": null, "three": "dos"}
+ {"one": 6, "six": "f", "two": [16, 17, 18], "five": "2018-01-06", "four": "2018-01-06 00:00:00.00001", "seven": 2, "three": "tres"}
+(6 rows)
+
+--Testcase 151:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" < 'BAZ';
+ v 
+---
+(0 rows)
+
+--Testcase 152:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" <= 'BAZ';
  v 
 ---
 (0 rows)
 
 -- invalid options
+--Testcase 80:
 SET client_min_messages = WARNING;
 --Testcase 29:
 CREATE FOREIGN TABLE example_fail (v jsonb)
 SERVER parquet_s3_srv;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:83: ERROR:  parquet_s3_fdw: filename or function is required
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:112: ERROR:  parquet_s3_fdw: filename or function is required
 --Testcase 30:
 CREATE FOREIGN TABLE example_fail (v jsonb)
 SERVER parquet_s3_srv
 OPTIONS (filename 'nonexistent.parquet', some_option '123', schemaless 'true');
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:87: ERROR:  parquet_s3_fdw: No such file or directory ('nonexistent.parquet')
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:116: ERROR:  parquet_s3_fdw: No such file or directory ('nonexistent.parquet')
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
 --Testcase 31:
 CREATE FOREIGN TABLE example_fail (v jsonb)
 SERVER parquet_s3_srv
 OPTIONS (filename :'var', some_option '123', schemaless 'true');
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:92: ERROR:  parquet_s3_fdw: invalid option "some_option"
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:121: ERROR:  parquet_s3_fdw: invalid option "some_option"
 HINT:  parquet_s3_fdw: There are no valid options in this context.
 -- type mismatch
 \set var :PATH_FILENAME'/data/simple/example1.parquet'
@@ -242,11 +330,11 @@ SERVER parquet_s3_srv
 OPTIONS (filename :'var', sorted 'one', schemaless 'true');
 --Testcase 33:
 SELECT (v->>'one')::int8[] FROM example_fail;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:101: ERROR:  malformed array literal: "1"
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:130: ERROR:  malformed array literal: "1"
 DETAIL:  Array value must start with "{" or dimension information.
 --Testcase 34:
 SELECT (v->>'two')::int8 FROM example_fail;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:103: ERROR:  invalid input syntax for type bigint: "[1, 2, 3]"
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:132: ERROR:  invalid input syntax for type bigint: "[1, 2, 3]"
 -- files_func
 --Testcase 35:
 CREATE FUNCTION list_parquet_s3_files(args JSONB)
@@ -296,17 +384,17 @@ LANGUAGE SQL;
 CREATE FOREIGN TABLE example_inv_func (v jsonb)
 SERVER parquet_s3_srv
 OPTIONS (files_func 'int_array_func', schemaless 'true');
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:139: ERROR:  parquet_s3_fdw: return type of 'int_array_func' is integer[]; expected text[]
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:168: ERROR:  parquet_s3_fdw: return type of 'int_array_func' is integer[]; expected text[]
 --Testcase 41:
 CREATE FOREIGN TABLE example_inv_func (v jsonb)
 SERVER parquet_s3_srv
 OPTIONS (files_func 'no_args_func', schemaless 'true');
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:143: ERROR:  function no_args_func(jsonb) does not exist
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:172: ERROR:  function no_args_func(jsonb) does not exist
 --Testcase 42:
 CREATE FOREIGN TABLE example_inv_func (v jsonb)
 SERVER parquet_s3_srv
 OPTIONS (files_func 'list_parquet_s3_files', files_func_arg 'invalid json', schemaless 'true');
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:147: ERROR:  invalid input syntax for type json
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:176: ERROR:  invalid input syntax for type json
 DETAIL:  Token "invalid" is invalid.
 CONTEXT:  JSON data, line 1: invalid...
 --Testcase 43:
@@ -418,7 +506,9 @@ SELECT * FROM example_sorted_caching ORDER BY (v->>'one')::int8;
 (11 rows)
 
 -- parallel execution
+--Testcase 81:
 SET parallel_setup_cost = 0;
+--Testcase 82:
 SET parallel_tuple_cost = 0.001;
 --Testcase 55:
 EXPLAIN (COSTS OFF) SELECT * FROM example_seq;
@@ -506,7 +596,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY (v->>'two')::int8[];
                  example2.parquet: 1
 (9 rows)
 
+--Testcase 83:
 ALTER FOREIGN TABLE example_sorted OPTIONS (ADD files_in_order 'true');
+--Testcase 84:
 EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY (v->>'one')::int8;
                   QUERY PLAN                   
 -----------------------------------------------
@@ -568,6 +660,7 @@ SELECT * FROM example_multisort ORDER BY (v->>'one')::int8, (v->>'five')::date;
 
 -- maps
 \set var :PATH_FILENAME'/data/complex/example3.parquet'
+--Testcase 85:
 SET client_min_messages = DEBUG1;
 --Testcase 66:
 CREATE FOREIGN TABLE example3 (v jsonb)
@@ -583,13 +676,14 @@ SELECT * FROM example3;
 
 --Testcase 68:
 SELECT * FROM example3 WHERE (v->>'three')::int4 = 3;
-psql:sql/16.0/schemaless/parquet_s3_fdw.sql:234: DEBUG:  parquet_s3_fdw: skip rowgroup 1
+psql:sql/16.0/schemaless/parquet_s3_fdw.sql:268: DEBUG:  parquet_s3_fdw: skip rowgroup 1
  v 
 ---
 (0 rows)
 
 -- analyze
 ANALYZE example_sorted;
+--Testcase 86:
 SET client_min_messages = WARNING;
 --get version
 --Testcase 69:
@@ -609,15 +703,454 @@ SET client_min_messages = WARNING;
 SELECT * FROM public.parquet_s3_fdw_version();
  parquet_s3_fdw_version 
 ------------------------
-                  10100
+                  10101
 (1 row)
 
 --Testcase 71:
 SELECT parquet_s3_fdw_version();
  parquet_s3_fdw_version 
 ------------------------
-                  10100
+                  10101
 (1 row)
 
+--Testcase 73:
+DROP FOREIGN TABLE example1;
+-- ====================================================================
+-- Check that userid to use when querying the remote table is correctly
+-- propagated into foreign rels.
+-- In local test parquet file, the query will still success because it
+-- does not use a connection.
+-- ====================================================================
+-- create empty_owner without access information to detect incorrect UserID.
+--Testcase 87:
+CREATE ROLE empty_owner LOGIN SUPERUSER;
+--Testcase 88:
+SET ROLE empty_owner;
+\set var :PATH_FILENAME'/data/simple/example1.parquet'
+--Testcase 89:
+CREATE FOREIGN TABLE example1 (
+    v jsonb)
+SERVER parquet_s3_srv
+OPTIONS (filename :'var', key_columns 'one', sorted 'one', schemaless 'true');
+--Testcase 90:
+CREATE VIEW v4 AS SELECT * FROM example1;
+--Testcase 91:
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM v4;
+                   QUERY PLAN                   
+------------------------------------------------
+ Gather
+   Output: example1.v
+   Workers Planned: 2
+   ->  Parallel Foreign Scan on public.example1
+         Output: example1.v
+         Reader: Single File
+         Row groups: 1, 2
+(7 rows)
+
+-- If undefine user owner, postgres core defaults to using the current user to query.
+-- For Foreign Scan, Foreign Modify.
+--Testcase 92:
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM v4;
+                   QUERY PLAN                   
+------------------------------------------------
+ Gather
+   Output: example1.v
+   Workers Planned: 2
+   ->  Parallel Foreign Scan on public.example1
+         Output: example1.v
+         Reader: Single File
+         Row groups: 1, 2
+(7 rows)
+
+--Testcase 93:
+INSERT INTO v4 VALUES ('{"one":7, "two":[20,21,22], "three":"view", "four":"2023-01-01", "five":"2023-01-01", "six":true, "seven": 2}');
+--Testcase 94:
+UPDATE v4 SET v = '{"three":"update"}';
+--Testcase 95:
+DELETE FROM v4;
+-- For Import Foreign Schema, postgres fixed using current user.
+--Testcase 96:
+CREATE SCHEMA s_test;
+\set var '\"':PATH_FILENAME'\/ported_postgres\"'
+IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO s_test OPTIONS (sorted 'c1');
+--Testcase 97:
+CREATE FUNCTION list_parquet_s3_files(args jsonb)
+RETURNS text[] as
+$$
+    SELECT array_agg(args->>'dir' || filename)
+    FROM (VALUES
+        ('/example1.parquet', 'simple'),
+        ('/example2.parquet', 'simple'),
+        ('/example3.parquet', 'complex')
+    ) AS files(filename, filetype)
+    WHERE filetype = args->>'type';
+$$
+LANGUAGE SQL;
+\set var  '{"dir": "':PATH_FILENAME'/data/simple", "type": "simple"}'
+--Testcase 98:
+SELECT import_parquet_s3(
+    'example_import',
+    's_test',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one"}');
+ import_parquet_s3 
+-------------------
+ 
+(1 row)
+
+--Testcase 99:
+DROP FUNCTION list_parquet_s3_files;
+--Testcase 100:
+DROP SCHEMA s_test CASCADE;
+-- For Acquire Sample Rows
+ANALYZE example1;
+--Testcase 101:
+CREATE ROLE regress_view_owner_another;
+--Testcase 102:
+ALTER VIEW v4 OWNER TO regress_view_owner_another;
+--Testcase 103:
+ALTER FOREIGN TABLE example1 OWNER TO regress_view_owner_another;
+GRANT SELECT ON example1 TO regress_view_owner_another;
+GRANT INSERT ON example1 TO regress_view_owner_another;
+GRANT UPDATE ON example1 TO regress_view_owner_another;
+GRANT DELETE ON example1 TO regress_view_owner_another;
+-- It fails as expected due to the lack of a user mapping for that user.
+-- For Foreign Scan, Foreign Modify.
+--Testcase 104:
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM v4;
+           QUERY PLAN            
+---------------------------------
+ Foreign Scan on public.example1
+   Output: example1.v
+   Reader: Trivial
+(3 rows)
+
+--Testcase 105:
+INSERT INTO v4 VALUES ('{"one":7, "two":[20,21,22], "three":"view", "four":"2023-01-01", "five":"2023-01-01", "six":true, "seven": 2}');
+--Testcase 106:
+UPDATE v4 SET v = '{"three":"update"}';
+--Testcase 107:
+DELETE FROM v4;
+-- For Import Foreign Schema, postgres fixed using current user.
+--Testcase 108:
+CREATE SCHEMA s_test;
+\set var '\"':PATH_FILENAME'\/ported_postgres\"'
+IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO s_test OPTIONS (sorted 'c1');
+--Testcase 109:
+CREATE FUNCTION list_parquet_s3_files(args jsonb)
+RETURNS text[] as
+$$
+    SELECT array_agg(args->>'dir' || filename)
+    FROM (VALUES
+        ('/example1.parquet', 'simple'),
+        ('/example2.parquet', 'simple'),
+        ('/example3.parquet', 'complex')
+    ) AS files(filename, filetype)
+    WHERE filetype = args->>'type';
+$$
+LANGUAGE SQL;
+\set var  '{"dir": "':PATH_FILENAME'/data/simple", "type": "simple"}'
+--Testcase 110:
+SELECT import_parquet_s3(
+    'example_import',
+    's_test',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one"}');
+ import_parquet_s3 
+-------------------
+ 
+(1 row)
+
+--Testcase 111:
+DROP FUNCTION list_parquet_s3_files;
+--Testcase 112:
+DROP SCHEMA s_test CASCADE;
+-- For Acquire Sample Rows
+ANALYZE example1;
+-- Identify the correct user, but it fails due to the lack access informations.
+--Testcase 113:
+CREATE USER MAPPING FOR regress_view_owner_another SERVER parquet_s3_srv;
+-- For Foreign Scan, Foreign Modify.
+--Testcase 114:
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM v4;
+           QUERY PLAN            
+---------------------------------
+ Foreign Scan on public.example1
+   Output: example1.v
+   Reader: Trivial
+(3 rows)
+
+--Testcase 115:
+INSERT INTO v4 VALUES ('{"one":7, "two":[20,21,22], "three":"view", "four":"2023-01-01", "five":"2023-01-01", "six":true, "seven": 2}');
+--Testcase 116:
+UPDATE v4 SET v = '{"three":"update"}';
+--Testcase 117:
+DELETE FROM v4;
+-- For Import Foreign Schema, postgres fixed using current user.
+--Testcase 118:
+CREATE SCHEMA s_test;
+\set var '\"':PATH_FILENAME'\/ported_postgres\"'
+IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO s_test OPTIONS (sorted 'c1');
+--Testcase 119:
+CREATE FUNCTION list_parquet_s3_files(args jsonb)
+RETURNS text[] as
+$$
+    SELECT array_agg(args->>'dir' || filename)
+    FROM (VALUES
+        ('/example1.parquet', 'simple'),
+        ('/example2.parquet', 'simple'),
+        ('/example3.parquet', 'complex')
+    ) AS files(filename, filetype)
+    WHERE filetype = args->>'type';
+$$
+LANGUAGE SQL;
+\set var  '{"dir": "':PATH_FILENAME'/data/simple", "type": "simple"}'
+--Testcase 120:
+SELECT import_parquet_s3(
+    'example_import',
+    's_test',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one"}');
+ import_parquet_s3 
+-------------------
+ 
+(1 row)
+
+--Testcase 121:
+DROP FUNCTION list_parquet_s3_files;
+--Testcase 122:
+DROP SCHEMA s_test CASCADE;
+-- For Acquire Sample Rows
+ANALYZE example1;
+--Testcase 123:
+DROP USER MAPPING FOR regress_view_owner_another SERVER parquet_s3_srv;
+-- Should not get that error once a user mapping is created and have enough information.
+--Testcase 124:
+CREATE USER MAPPING FOR regress_view_owner_another SERVER parquet_s3_srv :USER_PASSWORD;
+-- For Foreign Scan, Foreign Modify.
+--Testcase 125:
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM v4;
+           QUERY PLAN            
+---------------------------------
+ Foreign Scan on public.example1
+   Output: example1.v
+   Reader: Trivial
+(3 rows)
+
+--Testcase 126:
+INSERT INTO v4 VALUES ('{"one":7, "two":[20,21,22], "three":"view", "four":"2023-01-01", "five":"2023-01-01", "six":true, "seven": 2}');
+--Testcase 127:
+UPDATE v4 SET v = '{"three":"update"}';
+-- Delete 1 row to avoid ANALYZE empty table issue.
+--Testcase 128:
+DELETE FROM v4 WHERE (v->>'one')::int = 7;
+-- For Import Foreign Schema, postgres fixed using current user.
+--Testcase 129:
+CREATE SCHEMA s_test;
+\set var '\"':PATH_FILENAME'\/ported_postgres\"'
+IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO s_test OPTIONS (sorted 'c1');
+--Testcase 130:
+DROP SCHEMA s_test CASCADE;
+--Testcase 131:
+CREATE FUNCTION list_parquet_s3_files(args jsonb)
+RETURNS text[] as
+$$
+    SELECT array_agg(args->>'dir' || filename)
+    FROM (VALUES
+        ('/example1.parquet', 'simple'),
+        ('/example2.parquet', 'simple'),
+        ('/example3.parquet', 'complex')
+    ) AS files(filename, filetype)
+    WHERE filetype = args->>'type';
+$$
+LANGUAGE SQL;
+--Testcase 132:
+CREATE SCHEMA s_test;
+\set var  '{"dir": "':PATH_FILENAME'/data/simple", "type": "simple"}'
+--Testcase 133:
+SELECT import_parquet_s3(
+    'example_import',
+    's_test',
+    'parquet_s3_srv',
+    'list_parquet_s3_files',
+    :'var',
+    '{"sorted": "one"}');
+ import_parquet_s3 
+-------------------
+ 
+(1 row)
+
+--Testcase 134:
+DROP FUNCTION list_parquet_s3_files;
+--Testcase 135:
+DROP SCHEMA s_test CASCADE;
+-- For Acquire Sample Rows
+ANALYZE example1;
+-- Clean
+--Testcase 136:
+DROP VIEW v4;
+--Testcase 137:
+DROP USER MAPPING FOR regress_view_owner_another SERVER parquet_s3_srv;
+--Testcase 138:
+DROP OWNED BY regress_view_owner_another;
+--Testcase 139:
+DROP OWNED BY empty_owner;
+--Testcase 140:
+DROP ROLE regress_view_owner_another;
+-- current user cannot be dropped
+--Testcase 141:
+SET ROLE regress_parquet_s3_fdw;
+--Testcase 142:
+DROP ROLE empty_owner;
+--Testcase 153:
+RESET parallel_setup_cost;
+--Testcase 154:
+RESET parallel_tuple_cost;
+-- ===================================================================
+-- test case-sensitive column name
+-- ===================================================================
+\set var :PATH_FILENAME'/data/column_name/case-sensitive.parquet'
+--Testcase 155:
+CREATE FOREIGN TABLE case_sensitive (
+    v jsonb
+) SERVER parquet_s3_srv
+OPTIONS (filename :'var', schemaless 'true');
+--Testcase 156:
+\dS+ case_sensitive;
+                                 Foreign table "public.case_sensitive"
+ Column | Type  | Collation | Nullable | Default | FDW options | Storage  | Stats target | Description 
+--------+-------+-----------+----------+---------+-------------+----------+--------------+-------------
+ v      | jsonb |           |          |         |             | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet', schemaless 'true')
+
+-- Select all data from table, expect correct data for all json object fields
+--Testcase 157:
+SELECT * FROM case_sensitive;
+                            v                             
+----------------------------------------------------------
+ {"UPPER": "UPPER", "lower": "lower", "MiXiNg": "MixinG"}
+ {"UPPER": "CASE", "lower": "case", "MiXiNg": "CaSe"}
+ {"UPPER": "DATA", "lower": "data", "MiXiNg": "dAtA"}
+(3 rows)
+
+-- Extract jsonb expression with case-sensitive name
+--Testcase 158:
+SELECT v->>'UPPER', v->>'lower', v->>'MiXiNg' FROM case_sensitive;
+ ?column? | ?column? | ?column? 
+----------+----------+----------
+ UPPER    | lower    | MixinG
+ CASE     | case     | CaSe
+ DATA     | data     | dAtA
+(3 rows)
+
+-- Select some fields that do not exist in parquet file
+--Testcase 159:
+SELECT v->>'upper', v->>'LOWER', v->>'mIxInG' FROM case_sensitive;
+ ?column? | ?column? | ?column? 
+----------+----------+----------
+          |          | 
+          |          | 
+          |          | 
+(3 rows)
+
+-- Test sorted option with case-sensitive columns
+-- Single sorting key
+--Testcase 160:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (ADD sorted '"UPPER"');
+--Testcase 161:
+\dS+ case_sensitive;
+                                 Foreign table "public.case_sensitive"
+ Column | Type  | Collation | Nullable | Default | FDW options | Storage  | Stats target | Description 
+--------+-------+-----------+----------+---------+-------------+----------+--------------+-------------
+ v      | jsonb |           |          |         |             | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet', schemaless 'true', sorted '"UPPER"')
+
+--Testcase 162:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY v->>'UPPER';
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Foreign Scan on public.case_sensitive  (cost=0.00..0.04 rows=3 width=64)
+   Output: v, (v ->> 'UPPER'::text)
+   Reader: Single File
+   Row groups: 1
+(4 rows)
+
+--Testcase 163:
+SELECT * FROM case_sensitive ORDER BY v->>'UPPER';
+                            v                             
+----------------------------------------------------------
+ {"UPPER": "UPPER", "lower": "lower", "MiXiNg": "MixinG"}
+ {"UPPER": "CASE", "lower": "case", "MiXiNg": "CaSe"}
+ {"UPPER": "DATA", "lower": "data", "MiXiNg": "dAtA"}
+(3 rows)
+
+-- Try to ORDER BY non-sorted column
+--Testcase 164:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY v->>'MiXiNg';
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
+ Sort  (cost=0.06..0.07 rows=3 width=64)
+   Output: v, ((v ->> 'MiXiNg'::text))
+   Sort Key: ((case_sensitive.v ->> 'MiXiNg'::text))
+   ->  Foreign Scan on public.case_sensitive  (cost=0.00..0.04 rows=3 width=64)
+         Output: v, (v ->> 'MiXiNg'::text)
+         Reader: Single File
+         Row groups: 1
+(7 rows)
+
+--Testcase 165:
+SELECT * FROM case_sensitive ORDER BY v->>'MiXiNg';
+                            v                             
+----------------------------------------------------------
+ {"UPPER": "CASE", "lower": "case", "MiXiNg": "CaSe"}
+ {"UPPER": "DATA", "lower": "data", "MiXiNg": "dAtA"}
+ {"UPPER": "UPPER", "lower": "lower", "MiXiNg": "MixinG"}
+(3 rows)
+
+-- Multiple sorting key
+--Testcase 166:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted '"UPPER" lower "MiXiNg"');
+--Testcase 167:
+\dS+ case_sensitive;
+                                 Foreign table "public.case_sensitive"
+ Column | Type  | Collation | Nullable | Default | FDW options | Storage  | Stats target | Description 
+--------+-------+-----------+----------+---------+-------------+----------+--------------+-------------
+ v      | jsonb |           |          |         |             | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename '/tmp/data_local/data/column_name/case-sensitive.parquet', schemaless 'true', sorted '"UPPER" lower "MiXiNg"')
+
+--Testcase 168:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY v->>'UPPER', v->>'lower', v->>'MiXiNg';
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Foreign Scan on public.case_sensitive  (cost=0.00..0.05 rows=3 width=128)
+   Output: v, (v ->> 'UPPER'::text), (v ->> 'lower'::text), (v ->> 'MiXiNg'::text)
+   Reader: Single File
+   Row groups: 1
+(4 rows)
+
+--Testcase 169:
+SELECT * FROM case_sensitive ORDER BY v->>'UPPER', v->>'lower', v->>'MiXiNg';
+                            v                             
+----------------------------------------------------------
+ {"UPPER": "UPPER", "lower": "lower", "MiXiNg": "MixinG"}
+ {"UPPER": "CASE", "lower": "case", "MiXiNg": "CaSe"}
+ {"UPPER": "DATA", "lower": "data", "MiXiNg": "dAtA"}
+(3 rows)
+
+-- Clean-up
+--Testcase 170:
+DROP FOREIGN TABLE case_sensitive;
 --Testcase 72:
 DROP EXTENSION parquet_s3_fdw CASCADE;

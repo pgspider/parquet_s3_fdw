@@ -34,6 +34,10 @@ CREATE TYPE user_enum AS ENUM ('foo', 'bar', 'buz');
 CREATE SCHEMA "S 1";
 \set var '\"':PATH_FILENAME'\/ported_postgres\"'
 IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO "S 1" OPTIONS (sorted 'c1');
+-- some file does not have column c1
+ALTER FOREIGN TABLE "S 1"."T1" OPTIONS (SET sorted '"C 1"');
+ALTER FOREIGN TABLE "S 1"."T0" OPTIONS (SET sorted '"C 1"');
+ALTER FOREIGN TABLE "S 1"."ft1" OPTIONS (SET sorted '"C 1"');
 -- -- Disable autovacuum for these tables to avoid unexpected effects of that
 -- ALTER TABLE "S 1"."T1" SET (autovacuum_enabled = 'false');
 -- ALTER TABLE "S 1"."T2" SET (autovacuum_enabled = 'false');
@@ -164,9 +168,20 @@ OPTIONS (filename :'var', sorted 'c1');
 -- 	OPTIONS (ADD sslkey 'value', ADD sslcert 'value');
 -- ALTER FOREIGN TABLE ft1 OPTIONS (schema_name 'S 1', table_name 'T 1');
 -- ALTER FOREIGN TABLE ft2 OPTIONS (schema_name 'S 1', table_name 'T 1');
--- ALTER FOREIGN TABLE ft1 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
--- ALTER FOREIGN TABLE ft2 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
--- \det+
+ALTER FOREIGN TABLE ft1 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
+ALTER FOREIGN TABLE ft2 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
+\det+
+                                            List of foreign tables
+ Schema | Table |      Server      |                        FDW options                         | Description 
+--------+-------+------------------+------------------------------------------------------------+-------------
+ public | ft1   | parquet_s3_srv   | (filename 's3://ported_postgres/ft1.parquet', sorted 'c1') | 
+ public | ft2   | parquet_s3_srv   | (filename 's3://ported_postgres/ft1.parquet', sorted 'c1') | 
+ public | ft4   | parquet_s3_srv   | (filename 's3://ported_postgres/T3.parquet', sorted 'c1')  | 
+ public | ft5   | parquet_s3_srv   | (filename 's3://ported_postgres/T4.parquet', sorted 'c1')  | 
+ public | ft6   | parquet_s3_srv_2 | (filename 's3://ported_postgres/T4.parquet', sorted 'c1')  | 
+ public | ft7   | parquet_s3_srv_3 | (filename 's3://ported_postgres/T4.parquet', sorted 'c1')  | 
+(6 rows)
+
 -- Test that alteration of server options causes reconnection
 -- Remote's errors might be non-English, so hide them to ensure stable results
 \set VERBOSITY terse
@@ -202,7 +217,7 @@ ALTER SERVER parquet_s3_srv_alter_2 OPTIONS (DROP endpoint);
 ALTER SERVER parquet_s3_srv_alter_2 OPTIONS (DROP region); 
 --Testcase 17:
 SELECT c3, c5 FROM ft1 ORDER BY c3, c1 LIMIT 1;  -- should fail if only when we use minio/s3. With local file, option use_minio is useless.
-psql:sql/15.4/parquet_s3_fdw_post.sql:231: ERROR:  parquet_s3_fdw: failed to open Parquet file HeadObject failed
+psql:sql/15.4/parquet_s3_fdw_post.sql:236: ERROR:  parquet_s3_fdw: failed to open Parquet file HeadObject failed
 DO $d$
     BEGIN
         EXECUTE $$ALTER SERVER parquet_s3_srv
@@ -222,7 +237,7 @@ ALTER USER MAPPING FOR CURRENT_USER SERVER parquet_s3_srv
   OPTIONS (SET user 'no such user');
 --Testcase 19:
 SELECT c3, c5 FROM ft1 ORDER BY c3, c1 LIMIT 1;  -- should fail if only when we use minio/s3. With local file, option user is useless.
-psql:sql/15.4/parquet_s3_fdw_post.sql:246: ERROR:  parquet_s3_fdw: failed to open Parquet file HeadObject failed
+psql:sql/15.4/parquet_s3_fdw_post.sql:251: ERROR:  parquet_s3_fdw: failed to open Parquet file HeadObject failed
 --Testcase 462:
 ALTER USER MAPPING FOR CURRENT_USER SERVER parquet_s3_srv
   OPTIONS (SET user 'minioadmin');
@@ -244,7 +259,7 @@ SELECT c3, c5 FROM ft1 ORDER BY c3, c1 LIMIT 1;  -- should work again
 -- ===================================================================
 --Testcase 446:
 CREATE PUBLICATION testpub_ftbl FOR TABLE ft1;  -- should fail
-psql:sql/15.4/parquet_s3_fdw_post.sql:264: ERROR:  cannot add relation "ft1" to publication
+psql:sql/15.4/parquet_s3_fdw_post.sql:269: ERROR:  cannot add relation "ft1" to publication
 DETAIL:  This operation is not supported for foreign tables.
 -- ===================================================================
 -- simple queries
@@ -476,14 +491,14 @@ SET enable_nestloop TO false;
 -- inner join; expressions in the clauses appear in the equivalence class list
 --Testcase 39:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1, t2.c1 FROM ft2 t1 JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSET 100 LIMIT 10;
+	SELECT t1.c1, t2."C 1" FROM ft2 t1 JOIN "S 1"."T1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
                    QUERY PLAN                    
 -------------------------------------------------
  Limit
-   Output: t1.c1, t2.c1
+   Output: t1.c1, t2."C 1"
    ->  Merge Join
-         Output: t1.c1, t2.c1
-         Merge Cond: (t1.c1 = t2.c1)
+         Output: t1.c1, t2."C 1"
+         Merge Cond: (t1.c1 = t2."C 1")
          ->  Sort
                Output: t1.c1
                Sort Key: t1.c1
@@ -492,17 +507,17 @@ EXPLAIN (VERBOSE, COSTS OFF)
                      Reader: Single File
                      Row groups: 1
          ->  Sort
-               Output: t2.c1
-               Sort Key: t2.c1
+               Output: t2."C 1"
+               Sort Key: t2."C 1"
                ->  Foreign Scan on "S 1"."T1" t2
-                     Output: t2.c1
+                     Output: t2."C 1"
                      Reader: Single File
                      Row groups: 1
 (19 rows)
 
 --Testcase 40:
-SELECT t1.c1, t2.c1 FROM ft2 t1 JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSET 100 LIMIT 10;
- c1  | c1  
+SELECT t1.c1, t2."C 1" FROM ft2 t1 JOIN "S 1"."T1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
+ c1  | C 1 
 -----+-----
  101 | 101
  102 | 102
@@ -520,14 +535,14 @@ SELECT t1.c1, t2.c1 FROM ft2 t1 JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSET 100
 -- list but no output change as compared to the previous query
 --Testcase 41:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1, t2.c1 FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSET 100 LIMIT 10;
+	SELECT t1.c1, t2."C 1" FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
                    QUERY PLAN                    
 -------------------------------------------------
  Limit
-   Output: t1.c1, t2.c1
+   Output: t1.c1, t2."C 1"
    ->  Merge Left Join
-         Output: t1.c1, t2.c1
-         Merge Cond: (t1.c1 = t2.c1)
+         Output: t1.c1, t2."C 1"
+         Merge Cond: (t1.c1 = t2."C 1")
          ->  Sort
                Output: t1.c1
                Sort Key: t1.c1
@@ -536,17 +551,17 @@ EXPLAIN (VERBOSE, COSTS OFF)
                      Reader: Single File
                      Row groups: 1
          ->  Sort
-               Output: t2.c1
-               Sort Key: t2.c1
+               Output: t2."C 1"
+               Sort Key: t2."C 1"
                ->  Foreign Scan on "S 1"."T1" t2
-                     Output: t2.c1
+                     Output: t2."C 1"
                      Reader: Single File
                      Row groups: 1
 (19 rows)
 
 --Testcase 42:
-SELECT t1.c1, t2.c1 FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSET 100 LIMIT 10;
- c1  | c1  
+SELECT t1.c1, t2."C 1" FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
+ c1  | C 1 
 -----+-----
  101 | 101
  102 | 102
@@ -564,19 +579,19 @@ SELECT t1.c1, t2.c1 FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON (t1.c1 = t2.c1) OFFSE
 -- foreign join so that the local table can be joined using merge join strategy.
 --Testcase 43:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
+	SELECT t1."C 1" FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
                          QUERY PLAN                          
 -------------------------------------------------------------
  Limit
-   Output: t1.c1
+   Output: t1."C 1"
    ->  Merge Left Join
-         Output: t1.c1
-         Merge Cond: (t1.c1 = t3.c1)
+         Output: t1."C 1"
+         Merge Cond: (t1."C 1" = t3.c1)
          ->  Sort
-               Output: t1.c1
-               Sort Key: t1.c1
+               Output: t1."C 1"
+               Sort Key: t1."C 1"
                ->  Foreign Scan on "S 1"."T1" t1
-                     Output: t1.c1
+                     Output: t1."C 1"
                      Reader: Single File
                      Row groups: 1
          ->  Materialize
@@ -601,8 +616,8 @@ EXPLAIN (VERBOSE, COSTS OFF)
 (31 rows)
 
 --Testcase 44:
-SELECT t1.c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
- c1  
+SELECT t1."C 1" FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
+ C 1 
 -----
  101
  102
@@ -621,19 +636,19 @@ SELECT t1.c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) 
 -- included in join restrictions.
 --Testcase 45:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1, t2.c1, t3.c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
+	SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
                          QUERY PLAN                          
 -------------------------------------------------------------
  Limit
-   Output: t1.c1, t2.c1, t3.c1
+   Output: t1."C 1", t2.c1, t3.c1
    ->  Merge Left Join
-         Output: t1.c1, t2.c1, t3.c1
-         Merge Cond: (t1.c1 = t3.c1)
+         Output: t1."C 1", t2.c1, t3.c1
+         Merge Cond: (t1."C 1" = t3.c1)
          ->  Sort
-               Output: t1.c1
-               Sort Key: t1.c1
+               Output: t1."C 1"
+               Sort Key: t1."C 1"
                ->  Foreign Scan on "S 1"."T1" t1
-                     Output: t1.c1
+                     Output: t1."C 1"
                      Reader: Single File
                      Row groups: 1
          ->  Materialize
@@ -658,8 +673,8 @@ EXPLAIN (VERBOSE, COSTS OFF)
 (31 rows)
 
 --Testcase 46:
-SELECT t1.c1, t2.c1, t3.c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
- c1  | c1  | c1  
+SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
+ C 1 | c1  | c1  
 -----+-----+-----
  101 | 101 | 101
  102 | 102 | 102
@@ -676,19 +691,19 @@ SELECT t1.c1, t2.c1, t3.c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 
 -- Test similar to above with all full outer joins
 --Testcase 47:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT t1.c1, t2.c1, t3.c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
+	SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
                          QUERY PLAN                          
 -------------------------------------------------------------
  Limit
-   Output: t1.c1, t2.c1, t3.c1
+   Output: t1."C 1", t2.c1, t3.c1
    ->  Merge Full Join
-         Output: t1.c1, t2.c1, t3.c1
-         Merge Cond: (t1.c1 = t3.c1)
+         Output: t1."C 1", t2.c1, t3.c1
+         Merge Cond: (t1."C 1" = t3.c1)
          ->  Sort
-               Output: t1.c1
-               Sort Key: t1.c1
+               Output: t1."C 1"
+               Sort Key: t1."C 1"
                ->  Foreign Scan on "S 1"."T1" t1
-                     Output: t1.c1
+                     Output: t1."C 1"
                      Reader: Single File
                      Row groups: 1
          ->  Sort
@@ -714,8 +729,8 @@ EXPLAIN (VERBOSE, COSTS OFF)
 (32 rows)
 
 --Testcase 48:
-SELECT t1.c1, t2.c1, t3.c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1.c1) OFFSET 100 LIMIT 10;
- c1  | c1  | c1  
+SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
+ C 1 | c1  | c1  
 -----+-----+-----
  101 | 101 | 101
  102 | 102 | 102
@@ -860,8 +875,9 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 t1 WHERE c6 = E'foo''s\\bar';  --
  Foreign Scan on public.ft1 t1
    Output: c1, c2, c3, c5, c6, c7, c8
    Filter: (t1.c6 = 'foo''s\bar'::text)
-   Reader: Trivial
-(4 rows)
+   Reader: Single File
+   Row groups: 1
+(5 rows)
 
 --Testcase 61:
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 t1 WHERE c8 = 'foo';  -- can't be sent to remote
@@ -877,30 +893,30 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 t1 WHERE c8 = 'foo';  -- can't be
 -- parameterized remote path for foreign table
 --Testcase 62:
 EXPLAIN (VERBOSE, COSTS OFF)
-  SELECT * FROM "S 1"."T1" a, ft2 b WHERE a.c1 = 47 AND b.c1 = a.c2;
-                                          QUERY PLAN                                          
-----------------------------------------------------------------------------------------------
+  SELECT * FROM "S 1"."T1" a, ft2 b WHERE a."C 1" = 47 AND b.c1 = a.c2;
+                                           QUERY PLAN                                            
+-------------------------------------------------------------------------------------------------
  Hash Join
-   Output: a.c1, a.c2, a.c3, a.c5, a.c6, a.c7, a.c8, b.c1, b.c2, b.c3, b.c5, b.c6, b.c7, b.c8
+   Output: a."C 1", a.c2, a.c3, a.c5, a.c6, a.c7, a.c8, b.c1, b.c2, b.c3, b.c5, b.c6, b.c7, b.c8
    Hash Cond: (b.c1 = a.c2)
    ->  Foreign Scan on public.ft2 b
          Output: b.c1, b.c2, b.c3, b.c5, b.c6, b.c7, b.c8
          Reader: Single File
          Row groups: 1
    ->  Hash
-         Output: a.c1, a.c2, a.c3, a.c5, a.c6, a.c7, a.c8
+         Output: a."C 1", a.c2, a.c3, a.c5, a.c6, a.c7, a.c8
          ->  Foreign Scan on "S 1"."T1" a
-               Output: a.c1, a.c2, a.c3, a.c5, a.c6, a.c7, a.c8
-               Filter: (a.c1 = 47)
+               Output: a."C 1", a.c2, a.c3, a.c5, a.c6, a.c7, a.c8
+               Filter: (a."C 1" = 47)
                Reader: Single File
                Row groups: 1
 (14 rows)
 
 --Testcase 63:
-SELECT * FROM ft2 a, ft2 b WHERE a.c1 = 47 AND b.c1 = a.c2;
- c1 | c2 |  c3   |            c5            | c6 | c7 | c8  | c1 | c2 |  c3   |            c5            | c6 | c7 | c8  
-----+----+-------+--------------------------+----+----+-----+----+----+-------+--------------------------+----+----+-----
- 47 |  7 | 00047 | Tue Feb 17 00:00:00 1970 | 7  | 7  | foo |  7 |  7 | 00007 | Thu Jan 08 00:00:00 1970 | 7  | 7  | foo
+SELECT * FROM "S 1"."T1" a, ft2 b WHERE a."C 1" = 47 AND b.c1 = a.c2;
+ C 1 | c2 |  c3   |            c5            | c6 | c7 | c8  | c1 | c2 |  c3   |            c5            | c6 | c7 | c8  
+-----+----+-------+--------------------------+----+----+-----+----+----+-------+--------------------------+----+----+-----
+  47 |  7 | 00047 | Tue Feb 17 00:00:00 1970 | 7  | 7  | foo |  7 |  7 | 00007 | Thu Jan 08 00:00:00 1970 | 7  | 7  | foo
 (1 row)
 
 -- check both safe and unsafe join conditions
@@ -3173,15 +3189,15 @@ SELECT t1c1, avg(t1c1 + t2c1) FROM (SELECT t1.c1, t2.c1 FROM ft1 t1 JOIN ft2 t2 
 -- join with lateral reference
 --Testcase 163:
 EXPLAIN (VERBOSE, COSTS OFF)
-SELECT t1.c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1.c1 OFFSET 10 LIMIT 10;
-                              QUERY PLAN                               
------------------------------------------------------------------------
+SELECT t1."C 1" FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1."C 1" OFFSET 10 LIMIT 10;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
  Limit
-   Output: t1.c1
+   Output: t1."C 1"
    ->  Nested Loop
-         Output: t1.c1
+         Output: t1."C 1"
          ->  Foreign Scan on "S 1"."T1" t1
-               Output: t1.c1, t1.c2, t1.c3, t1.c5, t1.c6, t1.c7, t1.c8
+               Output: t1."C 1", t1.c2, t1.c3, t1.c5, t1.c6, t1.c7, t1.c8
                Reader: Single File
                Row groups: 1
          ->  HashAggregate
@@ -3204,19 +3220,19 @@ SELECT t1.c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 
 (25 rows)
 
 --Testcase 164:
-SELECT t1.c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1.c1 OFFSET 10 LIMIT 10;
- c1 
-----
-  1
-  1
-  1
-  1
-  1
-  1
-  1
-  1
-  1
-  1
+SELECT t1."C 1" FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1."C 1" OFFSET 10 LIMIT 10;
+ C 1 
+-----
+   1
+   1
+   1
+   1
+   1
+   1
+   1
+   1
+   1
+   1
 (10 rows)
 
 -- non-Var items in targetlist of the nullable rel of a join preventing
@@ -4970,24 +4986,24 @@ select sum(c2) * (random() <= 1)::int as sum from ft1 order by 1;
 set enable_hashagg to false;
 --Testcase 272:
 explain (verbose, costs off)
-select c2, sum from "S 1"."T1" t1, lateral (select sum(t2.c1 + t1.c1) sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1.c1 < 100 order by 1;
-                              QUERY PLAN                               
------------------------------------------------------------------------
+select c2, sum from "S 1"."T1" t1, lateral (select sum(t2.c1 + t1."C 1") sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1."C 1" < 100 order by 1;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
  Sort
    Output: t1.c2, qry.sum
    Sort Key: t1.c2
    ->  Nested Loop
          Output: t1.c2, qry.sum
          ->  Foreign Scan on "S 1"."T1" t1
-               Output: t1.c1, t1.c2, t1.c3, t1.c5, t1.c6, t1.c7, t1.c8
-               Filter: ((t1.c2 < 3) AND (t1.c1 < 100))
+               Output: t1."C 1", t1.c2, t1.c3, t1.c5, t1.c6, t1.c7, t1.c8
+               Filter: ((t1.c2 < 3) AND (t1."C 1" < 100))
                Reader: Single File
                Row groups: 1
          ->  Subquery Scan on qry
                Output: qry.sum, t2.c1
-               Filter: (((t1.c2 * 2))::numeric = qry.sum)
+               Filter: ((t1.c2 * 2) = qry.sum)
                ->  GroupAggregate
-                     Output: sum((t2.c1 + t1.c1)), t2.c1
+                     Output: sum((t2.c1 + t1."C 1")), t2.c1
                      Group Key: t2.c1
                      ->  Sort
                            Output: t2.c1
@@ -4999,7 +5015,7 @@ select c2, sum from "S 1"."T1" t1, lateral (select sum(t2.c1 + t1.c1) sum from f
 (23 rows)
 
 --Testcase 273:
-select c2, sum from "S 1"."T1" t1, lateral (select sum(t2.c1 + t1.c1) sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1.c1 < 100 order by 1;
+select c2, sum from "S 1"."T1" t1, lateral (select sum(t2.c1 + t1."C 1") sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1."C 1" < 100 order by 1;
  c2 | sum 
 ----+-----
   1 |   2
@@ -5015,22 +5031,22 @@ SELECT ref_0.c2, subq_1.*
 FROM
     "S 1"."T1" AS ref_0,
     LATERAL (
-        SELECT ref_0.c1 c1, subq_0.*
+        SELECT ref_0."C 1" c1, subq_0.*
         FROM (SELECT ref_0.c2, ref_1.c3
               FROM ft1 AS ref_1) AS subq_0
              RIGHT JOIN ft2 AS ref_3 ON (subq_0.c3 = ref_3.c3)
     ) AS subq_1
-WHERE ref_0.c1 < 10 AND subq_1.c3 = '00001'
-ORDER BY ref_0.c1;
-                                         QUERY PLAN                                         
---------------------------------------------------------------------------------------------
+WHERE ref_0."C 1" < 10 AND subq_1.c3 = '00001'
+ORDER BY ref_0."C 1";
+                                          QUERY PLAN                                           
+-----------------------------------------------------------------------------------------------
  Nested Loop
-   Output: ref_0.c2, ref_0.c1, (ref_0.c2), ref_1.c3, ref_0.c1
+   Output: ref_0.c2, ref_0."C 1", (ref_0.c2), ref_1.c3, ref_0."C 1"
    ->  Nested Loop
-         Output: ref_0.c2, ref_0.c1, ref_1.c3, (ref_0.c2)
+         Output: ref_0.c2, ref_0."C 1", ref_1.c3, (ref_0.c2)
          ->  Foreign Scan on "S 1"."T1" ref_0
-               Output: ref_0.c1, ref_0.c2, ref_0.c3, ref_0.c5, ref_0.c6, ref_0.c7, ref_0.c8
-               Filter: (ref_0.c1 < 10)
+               Output: ref_0."C 1", ref_0.c2, ref_0.c3, ref_0.c5, ref_0.c6, ref_0.c7, ref_0.c8
+               Filter: (ref_0."C 1" < 10)
                Reader: Single File
                Row groups: 1
          ->  Foreign Scan on public.ft1 ref_1
@@ -5052,13 +5068,13 @@ SELECT ref_0.c2, subq_1.*
 FROM
     "S 1"."T1" AS ref_0,
     LATERAL (
-        SELECT ref_0.c1 c1, subq_0.*
+        SELECT ref_0."C 1" c1, subq_0.*
         FROM (SELECT ref_0.c2, ref_1.c3
               FROM ft1 AS ref_1) AS subq_0
              RIGHT JOIN ft2 AS ref_3 ON (subq_0.c3 = ref_3.c3)
     ) AS subq_1
-WHERE ref_0.c1 < 10 AND subq_1.c3 = '00001'
-ORDER BY ref_0.c1;
+WHERE ref_0."C 1" < 10 AND subq_1.c3 = '00001'
+ORDER BY ref_0."C 1";
  c2 | c1 | c2 |  c3   
 ----+----+----+-------
   1 |  1 |  1 | 00001
@@ -5882,9 +5898,9 @@ DROP FUNCTION f_test(int);
 CREATE FOREIGN TABLE reindex_foreign (c1 int, c2 int)
   SERVER parquet_s3_srv_2 OPTIONS (filename :'var', sorted 'c1');
 REINDEX TABLE reindex_foreign; -- error
-psql:sql/15.4/parquet_s3_fdw_post.sql:1593: ERROR:  "reindex_foreign" is not a table or materialized view
+psql:sql/15.4/parquet_s3_fdw_post.sql:1598: ERROR:  "reindex_foreign" is not a table or materialized view
 REINDEX TABLE CONCURRENTLY reindex_foreign; -- error
-psql:sql/15.4/parquet_s3_fdw_post.sql:1594: ERROR:  "reindex_foreign" is not a table or materialized view
+psql:sql/15.4/parquet_s3_fdw_post.sql:1599: ERROR:  "reindex_foreign" is not a table or materialized view
 --Testcase 342:
 DROP FOREIGN TABLE reindex_foreign;
 -- partitions and foreign tables
@@ -6007,8 +6023,9 @@ explain (verbose, costs off) select * from ft3 where f1 = 'foo';
  Foreign Scan on public.ft3
    Output: f1, f2, f3
    Filter: (ft3.f1 = 'foo'::text)
-   Reader: Trivial
-(4 rows)
+   Reader: Single File
+   Row groups: 1
+(5 rows)
 
 --Testcase 346:
 explain (verbose, costs off) select * from ft3 where f1 COLLATE "C" = 'foo';
@@ -6017,8 +6034,9 @@ explain (verbose, costs off) select * from ft3 where f1 COLLATE "C" = 'foo';
  Foreign Scan on public.ft3
    Output: f1, f2, f3
    Filter: (ft3.f1 = 'foo'::text)
-   Reader: Trivial
-(4 rows)
+   Reader: Single File
+   Row groups: 1
+(5 rows)
 
 --Testcase 347:
 explain (verbose, costs off) select * from ft3 where f2 = 'foo';
@@ -6027,8 +6045,9 @@ explain (verbose, costs off) select * from ft3 where f2 = 'foo';
  Foreign Scan on public.ft3
    Output: f1, f2, f3
    Filter: (ft3.f2 = 'foo'::text)
-   Reader: Trivial
-(4 rows)
+   Reader: Single File
+   Row groups: 1
+(5 rows)
 
 --Testcase 348:
 explain (verbose, costs off) select * from ft3 where f3 = 'foo';
@@ -6056,8 +6075,9 @@ explain (verbose, costs off) select * from ft3 f, loct3 l
    ->  Foreign Scan on public.loct3 l
          Output: l.f1, l.f2, l.f3
          Filter: (l.f1 = 'foo'::text)
-         Reader: Trivial
-(11 rows)
+         Reader: Single File
+         Row groups: 1
+(12 rows)
 
 -- can't be sent to remote
 --Testcase 350:
@@ -6078,8 +6098,9 @@ explain (verbose, costs off) select * from ft3 where f1 = 'foo' COLLATE "C";
  Foreign Scan on public.ft3
    Output: f1, f2, f3
    Filter: (ft3.f1 = 'foo'::text COLLATE "C")
-   Reader: Trivial
-(4 rows)
+   Reader: Single File
+   Row groups: 1
+(5 rows)
 
 --Testcase 352:
 explain (verbose, costs off) select * from ft3 where f2 COLLATE "C" = 'foo';
@@ -6099,8 +6120,9 @@ explain (verbose, costs off) select * from ft3 where f2 = 'foo' COLLATE "C";
  Foreign Scan on public.ft3
    Output: f1, f2, f3
    Filter: (ft3.f2 = 'foo'::text COLLATE "C")
-   Reader: Trivial
-(4 rows)
+   Reader: Single File
+   Row groups: 1
+(5 rows)
 
 --Testcase 354:
 explain (verbose, costs off) select * from ft3 f, loct3 l
@@ -6117,8 +6139,9 @@ explain (verbose, costs off) select * from ft3 f, loct3 l
    ->  Foreign Scan on public.loct3 l
          Output: l.f1, l.f2, l.f3
          Filter: (l.f1 = 'foo'::text)
-         Reader: Trivial
-(11 rows)
+         Reader: Single File
+         Row groups: 1
+(12 rows)
 
 -- ===================================================================
 -- test writable foreign table stuff
@@ -8390,17 +8413,17 @@ Options: check_option=cascaded
 --Testcase 583:
 EXPLAIN (VERBOSE, COSTS OFF)
 INSERT INTO rw_view VALUES (0, 5);
-psql:sql/15.4/parquet_s3_fdw_post.sql:2052: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/15.4/parquet_s3_fdw_post.sql:2057: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 584:
 INSERT INTO rw_view VALUES (0, 5); -- should fail
-psql:sql/15.4/parquet_s3_fdw_post.sql:2054: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/15.4/parquet_s3_fdw_post.sql:2059: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 585:
 EXPLAIN (VERBOSE, COSTS OFF)
 INSERT INTO rw_view VALUES (0, 15);
-psql:sql/15.4/parquet_s3_fdw_post.sql:2057: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/15.4/parquet_s3_fdw_post.sql:2062: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 586:
 INSERT INTO rw_view VALUES (0, 15); -- ok
-psql:sql/15.4/parquet_s3_fdw_post.sql:2059: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/15.4/parquet_s3_fdw_post.sql:2064: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 587:
 SELECT * FROM foreign_tbl;
  a | b 
@@ -8410,17 +8433,17 @@ SELECT * FROM foreign_tbl;
 --Testcase 588:
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE rw_view SET b = b + 5;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2065: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/15.4/parquet_s3_fdw_post.sql:2070: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 589:
 UPDATE rw_view SET b = b + 5; -- should fail
-psql:sql/15.4/parquet_s3_fdw_post.sql:2067: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/15.4/parquet_s3_fdw_post.sql:2072: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 590:
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE rw_view SET b = b + 15;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2070: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/15.4/parquet_s3_fdw_post.sql:2075: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 591:
 UPDATE rw_view SET b = b + 15; -- ok
-psql:sql/15.4/parquet_s3_fdw_post.sql:2072: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
+psql:sql/15.4/parquet_s3_fdw_post.sql:2077: ERROR:  parquet_s3_fdw: unsupported feature WITH CHECK OPTION
 --Testcase 592:
 SELECT * FROM foreign_tbl;
  a | b 
@@ -8437,7 +8460,7 @@ SELECT * FROM foreign_tbl;
 -- ALTER SERVER loopback OPTIONS (DROP batch_size);
 --Testcase 389:
 DROP FOREIGN TABLE foreign_tbl CASCADE;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2086: NOTICE:  drop cascades to view rw_view
+psql:sql/15.4/parquet_s3_fdw_post.sql:2091: NOTICE:  drop cascades to view rw_view
 --Testcase 390:
 DROP TRIGGER row_before_insupd_trigger ON base_tbl;
 --Testcase 391:
@@ -8506,7 +8529,7 @@ DROP FOREIGN TABLE foreign_tbl CASCADE;
 DROP TRIGGER row_before_insupd_trigger ON child_tbl;
 --Testcase 400:
 DROP TABLE parent_tbl CASCADE;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2149: NOTICE:  drop cascades to view rw_view
+psql:sql/15.4/parquet_s3_fdw_post.sql:2154: NOTICE:  drop cascades to view rw_view
 --Testcase 401:
 DROP FUNCTION row_before_insupd_trigfunc;
 -- ===================================================================
@@ -8689,48 +8712,48 @@ AFTER INSERT OR UPDATE OR DELETE ON rem1
 FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
 --Testcase 617:
 delete from rem1;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trigger_func(<NULL>) called: action = DELETE, when = BEFORE, level = STATEMENT
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  OLD: (1,hi)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  OLD: (10,"hi remote")
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  OLD: (2,bye)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  OLD: (11,"bye remote")
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  OLD: (1,hi)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  OLD: (10,"hi remote")
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  OLD: (2,bye)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  OLD: (11,"bye remote")
-psql:sql/15.4/parquet_s3_fdw_post.sql:2303: NOTICE:  trigger_func(<NULL>) called: action = DELETE, when = AFTER, level = STATEMENT
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trigger_func(<NULL>) called: action = DELETE, when = BEFORE, level = STATEMENT
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  OLD: (1,hi)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  OLD: (10,"hi remote")
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  OLD: (2,bye)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  OLD: (11,"bye remote")
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  OLD: (1,hi)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  OLD: (10,"hi remote")
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  OLD: (2,bye)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  OLD: (11,"bye remote")
+psql:sql/15.4/parquet_s3_fdw_post.sql:2308: NOTICE:  trigger_func(<NULL>) called: action = DELETE, when = AFTER, level = STATEMENT
 --Testcase 618:
 insert into rem1 values(1,'insert');
-psql:sql/15.4/parquet_s3_fdw_post.sql:2305: NOTICE:  trigger_func(<NULL>) called: action = INSERT, when = BEFORE, level = STATEMENT
-psql:sql/15.4/parquet_s3_fdw_post.sql:2305: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2305: NOTICE:  NEW: (1,insert)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2305: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2305: NOTICE:  NEW: (1,insert)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2305: NOTICE:  trigger_func(<NULL>) called: action = INSERT, when = AFTER, level = STATEMENT
+psql:sql/15.4/parquet_s3_fdw_post.sql:2310: NOTICE:  trigger_func(<NULL>) called: action = INSERT, when = BEFORE, level = STATEMENT
+psql:sql/15.4/parquet_s3_fdw_post.sql:2310: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2310: NOTICE:  NEW: (1,insert)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2310: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2310: NOTICE:  NEW: (1,insert)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2310: NOTICE:  trigger_func(<NULL>) called: action = INSERT, when = AFTER, level = STATEMENT
 --Testcase 619:
 update rem1 set f2 = 'update' where f1 = 1;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2307: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = BEFORE, level = STATEMENT
-psql:sql/15.4/parquet_s3_fdw_post.sql:2307: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2307: NOTICE:  OLD: (1,insert),NEW: (1,update)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2307: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2307: NOTICE:  OLD: (1,insert),NEW: (1,update)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2307: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = AFTER, level = STATEMENT
+psql:sql/15.4/parquet_s3_fdw_post.sql:2312: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = BEFORE, level = STATEMENT
+psql:sql/15.4/parquet_s3_fdw_post.sql:2312: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2312: NOTICE:  OLD: (1,insert),NEW: (1,update)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2312: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2312: NOTICE:  OLD: (1,insert),NEW: (1,update)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2312: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = AFTER, level = STATEMENT
 --Testcase 620:
 update rem1 set f2 = f2 || f2;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2309: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = BEFORE, level = STATEMENT
-psql:sql/15.4/parquet_s3_fdw_post.sql:2309: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2309: NOTICE:  OLD: (1,update),NEW: (1,updateupdate)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2309: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2309: NOTICE:  OLD: (1,update),NEW: (1,updateupdate)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2309: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = AFTER, level = STATEMENT
+psql:sql/15.4/parquet_s3_fdw_post.sql:2314: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = BEFORE, level = STATEMENT
+psql:sql/15.4/parquet_s3_fdw_post.sql:2314: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2314: NOTICE:  OLD: (1,update),NEW: (1,updateupdate)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2314: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2314: NOTICE:  OLD: (1,update),NEW: (1,updateupdate)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2314: NOTICE:  trigger_func(<NULL>) called: action = UPDATE, when = AFTER, level = STATEMENT
 -- cleanup
 --Testcase 621:
 DROP TRIGGER trig_row_before ON rem1;
@@ -8753,28 +8776,28 @@ AFTER INSERT OR UPDATE OR DELETE ON rem1
 FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
 --Testcase 628:
 insert into rem1 values(1,'insert');
-psql:sql/15.4/parquet_s3_fdw_post.sql:2337: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2337: NOTICE:  NEW: (1,insert)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2337: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2337: NOTICE:  NEW: (1,insert)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2342: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2342: NOTICE:  NEW: (1,insert)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2342: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2342: NOTICE:  NEW: (1,insert)
 --Testcase 629:
 update rem1 set f2  = 'update' where f1 = 1;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2339: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2339: NOTICE:  OLD: (1,insert),NEW: (1,update)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2339: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2339: NOTICE:  OLD: (1,insert),NEW: (1,update)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2344: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2344: NOTICE:  OLD: (1,insert),NEW: (1,update)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2344: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2344: NOTICE:  OLD: (1,insert),NEW: (1,update)
 --Testcase 630:
 update rem1 set f2 = f2 || f2;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2341: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2341: NOTICE:  OLD: (1,update),NEW: (1,updateupdate)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2341: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2341: NOTICE:  OLD: (1,update),NEW: (1,updateupdate)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2346: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2346: NOTICE:  OLD: (1,update),NEW: (1,updateupdate)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2346: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2346: NOTICE:  OLD: (1,update),NEW: (1,updateupdate)
 --Testcase 631:
 delete from rem1;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2343: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2343: NOTICE:  OLD: (1,updateupdate)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2343: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2343: NOTICE:  OLD: (1,updateupdate)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2348: NOTICE:  trig_row_after1(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2348: NOTICE:  OLD: (1,updateupdate)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2348: NOTICE:  trig_row_after2(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2348: NOTICE:  OLD: (1,updateupdate)
 -- cleanup
 --Testcase 632:
 DROP TRIGGER trig_row_after1 ON rem1;
@@ -8801,16 +8824,16 @@ UPDATE rem1 set f2 = 'test';
 -- Insert or update matching: triggers are fired
 --Testcase 638:
 INSERT INTO rem1 values(2, 'update');
-psql:sql/15.4/parquet_s3_fdw_post.sql:2375: NOTICE:  trig_row_before_insupd(23, skidoo) BEFORE ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2375: NOTICE:  NEW: (2,update)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2375: NOTICE:  trig_row_after_insupd(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2375: NOTICE:  NEW: (2,update)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2380: NOTICE:  trig_row_before_insupd(23, skidoo) BEFORE ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2380: NOTICE:  NEW: (2,update)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2380: NOTICE:  trig_row_after_insupd(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2380: NOTICE:  NEW: (2,update)
 --Testcase 639:
 UPDATE rem1 set f2 = 'update update' where f1 = '2';
-psql:sql/15.4/parquet_s3_fdw_post.sql:2377: NOTICE:  trig_row_before_insupd(23, skidoo) BEFORE ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2377: NOTICE:  OLD: (2,update),NEW: (2,"update update")
-psql:sql/15.4/parquet_s3_fdw_post.sql:2377: NOTICE:  trig_row_after_insupd(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2377: NOTICE:  OLD: (2,update),NEW: (2,"update update")
+psql:sql/15.4/parquet_s3_fdw_post.sql:2382: NOTICE:  trig_row_before_insupd(23, skidoo) BEFORE ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2382: NOTICE:  OLD: (2,update),NEW: (2,"update update")
+psql:sql/15.4/parquet_s3_fdw_post.sql:2382: NOTICE:  trig_row_after_insupd(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2382: NOTICE:  OLD: (2,update),NEW: (2,"update update")
 --Testcase 640:
 CREATE TRIGGER trig_row_before_delete
 BEFORE DELETE ON rem1
@@ -8826,10 +8849,10 @@ EXECUTE PROCEDURE trigger_data(23,'skidoo');
 -- Trigger is fired for f1=2, not for f1=1
 --Testcase 642:
 DELETE FROM rem1;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2395: NOTICE:  trig_row_before_delete(23, skidoo) BEFORE ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2395: NOTICE:  OLD: (2,"update update")
-psql:sql/15.4/parquet_s3_fdw_post.sql:2395: NOTICE:  trig_row_after_delete(23, skidoo) AFTER ROW DELETE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2395: NOTICE:  OLD: (2,"update update")
+psql:sql/15.4/parquet_s3_fdw_post.sql:2400: NOTICE:  trig_row_before_delete(23, skidoo) BEFORE ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2400: NOTICE:  OLD: (2,"update update")
+psql:sql/15.4/parquet_s3_fdw_post.sql:2400: NOTICE:  trig_row_after_delete(23, skidoo) AFTER ROW DELETE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2400: NOTICE:  OLD: (2,"update update")
 -- cleanup
 --Testcase 643:
 DROP TRIGGER trig_row_before_insupd ON rem1;
@@ -9025,23 +9048,23 @@ CREATE TRIGGER trig_local_before BEFORE INSERT OR UPDATE ON loc1
 FOR EACH ROW EXECUTE PROCEDURE trig_row_before_insupdate();
 --Testcase 687:
 INSERT INTO rem1(f2) VALUES ('test');
-psql:sql/15.4/parquet_s3_fdw_post.sql:2539: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2539: NOTICE:  NEW: (12,test)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2539: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2539: NOTICE:  NEW: (12,test)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2544: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2544: NOTICE:  NEW: (12,test)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2544: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2544: NOTICE:  NEW: (12,test)
 --Testcase 688:
 UPDATE rem1 SET f2 = 'testo';
-psql:sql/15.4/parquet_s3_fdw_post.sql:2541: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2541: NOTICE:  OLD: (12,test),NEW: (12,testo)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2541: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2541: NOTICE:  OLD: (12,test),NEW: (12,testo)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2546: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2546: NOTICE:  OLD: (12,test),NEW: (12,testo)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2546: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2546: NOTICE:  OLD: (12,test),NEW: (12,testo)
 -- Test returning a system attribute
 --Testcase 689:
 INSERT INTO rem1(f2) VALUES ('test');
-psql:sql/15.4/parquet_s3_fdw_post.sql:2545: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2545: NOTICE:  NEW: (13,test)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2545: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
-psql:sql/15.4/parquet_s3_fdw_post.sql:2545: NOTICE:  NEW: (13,test)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2550: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2550: NOTICE:  NEW: (13,test)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2550: NOTICE:  trig_row_after(23, skidoo) AFTER ROW INSERT ON rem1
+psql:sql/15.4/parquet_s3_fdw_post.sql:2550: NOTICE:  NEW: (13,test)
 -- cleanup
 --Testcase 690:
 DROP TRIGGER trig_row_before ON rem1;
@@ -9325,7 +9348,7 @@ CREATE TABLE a (aa TEXT);
 --Testcase 728:
 CREATE FOREIGN TABLE loct (aa TEXT, bb TEXT, id serial OPTIONS (key 'true')) INHERITS (a)
   SERVER parquet_s3_srv OPTIONS (filename :'var');
-psql:sql/15.4/parquet_s3_fdw_post.sql:2679: NOTICE:  merging column "aa" with inherited definition
+psql:sql/15.4/parquet_s3_fdw_post.sql:2684: NOTICE:  merging column "aa" with inherited definition
 --Testcase 729:
 ALTER TABLE a SET (autovacuum_enabled = 'false');
 -- ALTER TABLE loct SET (autovacuum_enabled = 'false');
@@ -9333,7 +9356,7 @@ ALTER TABLE a SET (autovacuum_enabled = 'false');
 --Testcase 730:
 CREATE FOREIGN TABLE b (aa TEXT, bb TEXT, id serial OPTIONS (key 'true')) INHERITS (a)
   SERVER parquet_s3_srv OPTIONS (filename :'var');
-psql:sql/15.4/parquet_s3_fdw_post.sql:2686: NOTICE:  merging column "aa" with inherited definition
+psql:sql/15.4/parquet_s3_fdw_post.sql:2691: NOTICE:  merging column "aa" with inherited definition
 --Testcase 731:
 DELETE FROM b;
 --Testcase 732:
@@ -9498,7 +9521,7 @@ SELECT tableoid::regclass, * FROM ONLY a;
 DROP FOREIGN TABLE b CASCADE;
 --Testcase 758:
 DROP TABLE a CASCADE;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2751: NOTICE:  drop cascades to foreign table loct
+psql:sql/15.4/parquet_s3_fdw_post.sql:2756: NOTICE:  drop cascades to foreign table loct
 -- Check SELECT FOR UPDATE/SHARE with an inherited source table
 -- create table loct1 (f1 int, f2 int, f3 int);
 -- create table loct2 (f1 int, f2 int, f3 int);
@@ -9622,9 +9645,9 @@ select * from bar where f1 in (select f1 from foo) for share;
 --Testcase 779:
 create foreign table foo2child (id serial OPTIONS (key 'true'), f3 int) inherits (foo2)
   server parquet_s3_srv options (filename :'var');
-psql:sql/15.4/parquet_s3_fdw_post.sql:2816: NOTICE:  moving and merging column "id" with inherited definition
+psql:sql/15.4/parquet_s3_fdw_post.sql:2821: NOTICE:  moving and merging column "id" with inherited definition
 DETAIL:  User-specified column moved to the position of the inherited column.
-psql:sql/15.4/parquet_s3_fdw_post.sql:2816: NOTICE:  moving and merging column "f3" with inherited definition
+psql:sql/15.4/parquet_s3_fdw_post.sql:2821: NOTICE:  moving and merging column "f3" with inherited definition
 DETAIL:  User-specified column moved to the position of the inherited column.
 --Testcase 780:
 explain (verbose, costs off)
@@ -9668,7 +9691,7 @@ drop foreign table foo2child;
 -- And with a local child relation of the foreign table parent
 --Testcase 783:
 create table foo2child (f3 int) inherits (foo2);
-psql:sql/15.4/parquet_s3_fdw_post.sql:2829: NOTICE:  moving and merging column "f3" with inherited definition
+psql:sql/15.4/parquet_s3_fdw_post.sql:2834: NOTICE:  moving and merging column "f3" with inherited definition
 DETAIL:  User-specified column moved to the position of the inherited column.
 --Testcase 784:
 explain (verbose, costs off)
@@ -9948,7 +9971,7 @@ fetch from c;
 
 --Testcase 805:
 update bar set f2 = null where current of c;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2911: ERROR:  WHERE CURRENT OF is not supported for this table type
+psql:sql/15.4/parquet_s3_fdw_post.sql:2916: ERROR:  WHERE CURRENT OF is not supported for this table type
 rollback;
 --Testcase 806:
 explain (verbose, costs off)
@@ -10034,18 +10057,18 @@ update bar set f2 = f2 + 100;
 
 --Testcase 814:
 update bar set f2 = f2 + 100;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON bar2
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  OLD: (3,333,33,),NEW: (3,433,33,)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON bar2
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  OLD: (4,344,44,),NEW: (4,444,44,)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON bar2
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  OLD: (7,277,77,),NEW: (7,377,77,)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON bar2
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  OLD: (3,333,33,),NEW: (3,433,33,)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON bar2
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  OLD: (4,344,44,),NEW: (4,444,44,)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON bar2
-psql:sql/15.4/parquet_s3_fdw_post.sql:2942: NOTICE:  OLD: (7,277,77,),NEW: (7,377,77,)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON bar2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  OLD: (3,333,33,),NEW: (3,433,33,)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON bar2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  OLD: (4,344,44,),NEW: (4,444,44,)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW UPDATE ON bar2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  OLD: (7,277,77,),NEW: (7,377,77,)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON bar2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  OLD: (3,333,33,),NEW: (3,433,33,)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON bar2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  OLD: (4,344,44,),NEW: (4,444,44,)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON bar2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2947: NOTICE:  OLD: (7,277,77,),NEW: (7,377,77,)
 --Testcase 815:
 explain (verbose, costs off)
 delete from bar where f2 < 400;
@@ -10067,17 +10090,17 @@ delete from bar where f2 < 400;
 
 --Testcase 816:
 delete from bar where f2 < 400;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2948: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON bar2
-psql:sql/15.4/parquet_s3_fdw_post.sql:2948: NOTICE:  OLD: (7,377,77,)
-psql:sql/15.4/parquet_s3_fdw_post.sql:2948: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON bar2
-psql:sql/15.4/parquet_s3_fdw_post.sql:2948: NOTICE:  OLD: (7,377,77,)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2953: NOTICE:  trig_row_before(23, skidoo) BEFORE ROW DELETE ON bar2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2953: NOTICE:  OLD: (7,377,77,)
+psql:sql/15.4/parquet_s3_fdw_post.sql:2953: NOTICE:  trig_row_after(23, skidoo) AFTER ROW DELETE ON bar2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2953: NOTICE:  OLD: (7,377,77,)
 -- cleanup
 --Testcase 817:
 drop table foo cascade;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2952: NOTICE:  drop cascades to foreign table foo2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2957: NOTICE:  drop cascades to foreign table foo2
 --Testcase 818:
 drop table bar cascade;
-psql:sql/15.4/parquet_s3_fdw_post.sql:2954: NOTICE:  drop cascades to foreign table bar2
+psql:sql/15.4/parquet_s3_fdw_post.sql:2959: NOTICE:  drop cascades to foreign table bar2
 -- drop table loct1;
 -- drop table loct2;
 -- Test pushing down UPDATE/DELETE joins to the remote server
@@ -10553,223 +10576,265 @@ CREATE SCHEMA import_dest1;
 IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO import_dest1 OPTIONS (sorted 'c1');
 --Testcase 403:
 \det+ import_dest1.*
-                                                    List of foreign tables
-    Schema    |   Table    |     Server     |                            FDW options                            | Description 
---------------+------------+----------------+-------------------------------------------------------------------+-------------
- import_dest1 | T0         | parquet_s3_srv | (filename 's3://ported_postgres/T0.parquet', sorted 'c1')         | 
- import_dest1 | T1         | parquet_s3_srv | (filename 's3://ported_postgres/T1.parquet', sorted 'c1')         | 
- import_dest1 | T2         | parquet_s3_srv | (filename 's3://ported_postgres/T2.parquet', sorted 'c1')         | 
- import_dest1 | T3         | parquet_s3_srv | (filename 's3://ported_postgres/T3.parquet', sorted 'c1')         | 
- import_dest1 | T4         | parquet_s3_srv | (filename 's3://ported_postgres/T4.parquet', sorted 'c1')         | 
- import_dest1 | base_tbl   | parquet_s3_srv | (filename 's3://ported_postgres/base_tbl.parquet', sorted 'c1')   | 
- import_dest1 | child_tbl  | parquet_s3_srv | (filename 's3://ported_postgres/child_tbl.parquet', sorted 'c1')  | 
- import_dest1 | ft1        | parquet_s3_srv | (filename 's3://ported_postgres/ft1.parquet', sorted 'c1')        | 
- import_dest1 | ft1_null   | parquet_s3_srv | (filename 's3://ported_postgres/ft1_null.parquet', sorted 'c1')   | 
- import_dest1 | gloc1      | parquet_s3_srv | (filename 's3://ported_postgres/gloc1.parquet', sorted 'c1')      | 
- import_dest1 | loc1       | parquet_s3_srv | (filename 's3://ported_postgres/loc1.parquet', sorted 'c1')       | 
- import_dest1 | local_tbl  | parquet_s3_srv | (filename 's3://ported_postgres/local_tbl.parquet', sorted 'c1')  | 
- import_dest1 | loct       | parquet_s3_srv | (filename 's3://ported_postgres/loct.parquet', sorted 'c1')       | 
- import_dest1 | loct1      | parquet_s3_srv | (filename 's3://ported_postgres/loct1.parquet', sorted 'c1')      | 
- import_dest1 | loct2      | parquet_s3_srv | (filename 's3://ported_postgres/loct2.parquet', sorted 'c1')      | 
- import_dest1 | loct3      | parquet_s3_srv | (filename 's3://ported_postgres/loct3.parquet', sorted 'c1')      | 
- import_dest1 | loct3_1    | parquet_s3_srv | (filename 's3://ported_postgres/loct3_1.parquet', sorted 'c1')    | 
- import_dest1 | loct4      | parquet_s3_srv | (filename 's3://ported_postgres/loct4.parquet', sorted 'c1')      | 
- import_dest1 | loct4_1    | parquet_s3_srv | (filename 's3://ported_postgres/loct4_1.parquet', sorted 'c1')    | 
- import_dest1 | loct_empty | parquet_s3_srv | (filename 's3://ported_postgres/loct_empty.parquet', sorted 'c1') | 
-(20 rows)
+                                                        List of foreign tables
+    Schema    |     Table      |     Server     |                              FDW options                              | Description 
+--------------+----------------+----------------+-----------------------------------------------------------------------+-------------
+ import_dest1 | T0             | parquet_s3_srv | (filename 's3://ported_postgres/T0.parquet', sorted 'c1')             | 
+ import_dest1 | T0_schemaless  | parquet_s3_srv | (filename 's3://ported_postgres/T0_schemaless.parquet', sorted 'c1')  | 
+ import_dest1 | T1             | parquet_s3_srv | (filename 's3://ported_postgres/T1.parquet', sorted 'c1')             | 
+ import_dest1 | T1_schemaless  | parquet_s3_srv | (filename 's3://ported_postgres/T1_schemaless.parquet', sorted 'c1')  | 
+ import_dest1 | T2             | parquet_s3_srv | (filename 's3://ported_postgres/T2.parquet', sorted 'c1')             | 
+ import_dest1 | T3             | parquet_s3_srv | (filename 's3://ported_postgres/T3.parquet', sorted 'c1')             | 
+ import_dest1 | T4             | parquet_s3_srv | (filename 's3://ported_postgres/T4.parquet', sorted 'c1')             | 
+ import_dest1 | base_tbl       | parquet_s3_srv | (filename 's3://ported_postgres/base_tbl.parquet', sorted 'c1')       | 
+ import_dest1 | child_tbl      | parquet_s3_srv | (filename 's3://ported_postgres/child_tbl.parquet', sorted 'c1')      | 
+ import_dest1 | ft1            | parquet_s3_srv | (filename 's3://ported_postgres/ft1.parquet', sorted 'c1')            | 
+ import_dest1 | ft1_null       | parquet_s3_srv | (filename 's3://ported_postgres/ft1_null.parquet', sorted 'c1')       | 
+ import_dest1 | ft1_schemaless | parquet_s3_srv | (filename 's3://ported_postgres/ft1_schemaless.parquet', sorted 'c1') | 
+ import_dest1 | gloc1          | parquet_s3_srv | (filename 's3://ported_postgres/gloc1.parquet', sorted 'c1')          | 
+ import_dest1 | loc1           | parquet_s3_srv | (filename 's3://ported_postgres/loc1.parquet', sorted 'c1')           | 
+ import_dest1 | local_tbl      | parquet_s3_srv | (filename 's3://ported_postgres/local_tbl.parquet', sorted 'c1')      | 
+ import_dest1 | loct           | parquet_s3_srv | (filename 's3://ported_postgres/loct.parquet', sorted 'c1')           | 
+ import_dest1 | loct1          | parquet_s3_srv | (filename 's3://ported_postgres/loct1.parquet', sorted 'c1')          | 
+ import_dest1 | loct2          | parquet_s3_srv | (filename 's3://ported_postgres/loct2.parquet', sorted 'c1')          | 
+ import_dest1 | loct3          | parquet_s3_srv | (filename 's3://ported_postgres/loct3.parquet', sorted 'c1')          | 
+ import_dest1 | loct3_1        | parquet_s3_srv | (filename 's3://ported_postgres/loct3_1.parquet', sorted 'c1')        | 
+ import_dest1 | loct4          | parquet_s3_srv | (filename 's3://ported_postgres/loct4.parquet', sorted 'c1')          | 
+ import_dest1 | loct4_1        | parquet_s3_srv | (filename 's3://ported_postgres/loct4_1.parquet', sorted 'c1')        | 
+ import_dest1 | loct_empty     | parquet_s3_srv | (filename 's3://ported_postgres/loct_empty.parquet', sorted 'c1')     | 
+(23 rows)
 
 --Testcase 404:
 \d import_dest1.*
-                           Foreign table "import_dest1.T0"
- Column |            Type             | Collation | Nullable | Default | FDW options 
---------+-----------------------------+-----------+----------+---------+-------------
- c1     | bigint                      |           |          |         | 
- c2     | bigint                      |           |          |         | 
- c3     | text                        |           |          |         | 
- c5     | timestamp without time zone |           |          |         | 
- c6     | text                        |           |          |         | 
- c7     | text                        |           |          |         | 
- c8     | text                        |           |          |         | 
+                               Foreign table "import_dest1.T0"
+ Column |            Type             | Collation | Nullable | Default |     FDW options     
+--------+-----------------------------+-----------+----------+---------+---------------------
+ C 1    | integer                     |           |          |         | (column_name 'C 1')
+ c2     | integer                     |           |          |         | (column_name 'c2')
+ c3     | text                        |           |          |         | (column_name 'c3')
+ c5     | timestamp without time zone |           |          |         | (column_name 'c5')
+ c6     | text                        |           |          |         | (column_name 'c6')
+ c7     | text                        |           |          |         | (column_name 'c7')
+ c8     | text                        |           |          |         | (column_name 'c8')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/T0.parquet', sorted 'c1')
 
-                           Foreign table "import_dest1.T1"
- Column |            Type             | Collation | Nullable | Default | FDW options 
---------+-----------------------------+-----------+----------+---------+-------------
- c1     | bigint                      |           |          |         | 
- c2     | bigint                      |           |          |         | 
- c3     | text                        |           |          |         | 
- c5     | timestamp without time zone |           |          |         | 
- c6     | text                        |           |          |         | 
- c7     | text                        |           |          |         | 
- c8     | text                        |           |          |         | 
+                         Foreign table "import_dest1.T0_schemaless"
+ Column |            Type             | Collation | Nullable | Default |    FDW options     
+--------+-----------------------------+-----------+----------+---------+--------------------
+ c1     | integer                     |           |          |         | (column_name 'c1')
+ c2     | integer                     |           |          |         | (column_name 'c2')
+ c3     | text                        |           |          |         | (column_name 'c3')
+ c5     | timestamp without time zone |           |          |         | (column_name 'c5')
+ c6     | text                        |           |          |         | (column_name 'c6')
+ c7     | text                        |           |          |         | (column_name 'c7')
+ c8     | text                        |           |          |         | (column_name 'c8')
+Server: parquet_s3_srv
+FDW options: (filename 's3://ported_postgres/T0_schemaless.parquet', sorted 'c1')
+
+                               Foreign table "import_dest1.T1"
+ Column |            Type             | Collation | Nullable | Default |     FDW options     
+--------+-----------------------------+-----------+----------+---------+---------------------
+ C 1    | integer                     |           |          |         | (column_name 'C 1')
+ c2     | integer                     |           |          |         | (column_name 'c2')
+ c3     | text                        |           |          |         | (column_name 'c3')
+ c5     | timestamp without time zone |           |          |         | (column_name 'c5')
+ c6     | text                        |           |          |         | (column_name 'c6')
+ c7     | text                        |           |          |         | (column_name 'c7')
+ c8     | text                        |           |          |         | (column_name 'c8')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/T1.parquet', sorted 'c1')
 
-                Foreign table "import_dest1.T2"
- Column |  Type  | Collation | Nullable | Default | FDW options 
---------+--------+-----------+----------+---------+-------------
- c1     | bigint |           |          |         | 
- c2     | text   |           |          |         | 
+                         Foreign table "import_dest1.T1_schemaless"
+ Column |            Type             | Collation | Nullable | Default |    FDW options     
+--------+-----------------------------+-----------+----------+---------+--------------------
+ c1     | integer                     |           |          |         | (column_name 'c1')
+ c2     | integer                     |           |          |         | (column_name 'c2')
+ c3     | text                        |           |          |         | (column_name 'c3')
+ c5     | timestamp without time zone |           |          |         | (column_name 'c5')
+ c6     | text                        |           |          |         | (column_name 'c6')
+ c7     | text                        |           |          |         | (column_name 'c7')
+ c8     | text                        |           |          |         | (column_name 'c8')
+Server: parquet_s3_srv
+FDW options: (filename 's3://ported_postgres/T1_schemaless.parquet', sorted 'c1')
+
+                    Foreign table "import_dest1.T2"
+ Column |  Type  | Collation | Nullable | Default |    FDW options     
+--------+--------+-----------+----------+---------+--------------------
+ c1     | bigint |           |          |         | (column_name 'c1')
+ c2     | text   |           |          |         | (column_name 'c2')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/T2.parquet', sorted 'c1')
 
-                Foreign table "import_dest1.T3"
- Column |  Type  | Collation | Nullable | Default | FDW options 
---------+--------+-----------+----------+---------+-------------
- c1     | bigint |           |          |         | 
- c2     | bigint |           |          |         | 
- c3     | text   |           |          |         | 
+                    Foreign table "import_dest1.T3"
+ Column |  Type  | Collation | Nullable | Default |    FDW options     
+--------+--------+-----------+----------+---------+--------------------
+ c1     | bigint |           |          |         | (column_name 'c1')
+ c2     | bigint |           |          |         | (column_name 'c2')
+ c3     | text   |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/T3.parquet', sorted 'c1')
 
-                Foreign table "import_dest1.T4"
- Column |  Type  | Collation | Nullable | Default | FDW options 
---------+--------+-----------+----------+---------+-------------
- c1     | bigint |           |          |         | 
- c2     | bigint |           |          |         | 
- c3     | text   |           |          |         | 
+                    Foreign table "import_dest1.T4"
+ Column |  Type  | Collation | Nullable | Default |    FDW options     
+--------+--------+-----------+----------+---------+--------------------
+ c1     | bigint |           |          |         | (column_name 'c1')
+ c2     | bigint |           |          |         | (column_name 'c2')
+ c3     | text   |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/T4.parquet', sorted 'c1')
 
-                  Foreign table "import_dest1.base_tbl"
- Column |       Type       | Collation | Nullable | Default | FDW options 
---------+------------------+-----------+----------+---------+-------------
- a      | double precision |           |          |         | 
- b      | double precision |           |          |         | 
+                     Foreign table "import_dest1.base_tbl"
+ Column |       Type       | Collation | Nullable | Default |    FDW options    
+--------+------------------+-----------+----------+---------+-------------------
+ a      | double precision |           |          |         | (column_name 'a')
+ b      | double precision |           |          |         | (column_name 'b')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/base_tbl.parquet', sorted 'c1')
 
-                  Foreign table "import_dest1.child_tbl"
- Column |       Type       | Collation | Nullable | Default | FDW options 
---------+------------------+-----------+----------+---------+-------------
- a      | double precision |           |          |         | 
- b      | double precision |           |          |         | 
+                     Foreign table "import_dest1.child_tbl"
+ Column |       Type       | Collation | Nullable | Default |    FDW options    
+--------+------------------+-----------+----------+---------+-------------------
+ a      | double precision |           |          |         | (column_name 'a')
+ b      | double precision |           |          |         | (column_name 'b')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/child_tbl.parquet', sorted 'c1')
 
-                          Foreign table "import_dest1.ft1"
- Column |            Type             | Collation | Nullable | Default | FDW options 
---------+-----------------------------+-----------+----------+---------+-------------
- c1     | bigint                      |           |          |         | 
- c2     | bigint                      |           |          |         | 
- c3     | text                        |           |          |         | 
- c5     | timestamp without time zone |           |          |         | 
- c6     | text                        |           |          |         | 
- c7     | text                        |           |          |         | 
- c8     | text                        |           |          |         | 
+                              Foreign table "import_dest1.ft1"
+ Column |            Type             | Collation | Nullable | Default |     FDW options     
+--------+-----------------------------+-----------+----------+---------+---------------------
+ C 1    | integer                     |           |          |         | (column_name 'C 1')
+ c2     | integer                     |           |          |         | (column_name 'c2')
+ c3     | text                        |           |          |         | (column_name 'c3')
+ c5     | timestamp without time zone |           |          |         | (column_name 'c5')
+ c6     | text                        |           |          |         | (column_name 'c6')
+ c7     | text                        |           |          |         | (column_name 'c7')
+ c8     | text                        |           |          |         | (column_name 'c8')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/ft1.parquet', sorted 'c1')
 
-                        Foreign table "import_dest1.ft1_null"
- Column |            Type             | Collation | Nullable | Default | FDW options 
---------+-----------------------------+-----------+----------+---------+-------------
- c1     | bigint                      |           |          |         | 
- c2     | bigint                      |           |          |         | 
- c3     | text                        |           |          |         | 
- c5     | timestamp without time zone |           |          |         | 
- c6     | text                        |           |          |         | 
- c7     | text                        |           |          |         | 
- c8     | text                        |           |          |         | 
+                           Foreign table "import_dest1.ft1_null"
+ Column |            Type             | Collation | Nullable | Default |    FDW options     
+--------+-----------------------------+-----------+----------+---------+--------------------
+ c1     | bigint                      |           |          |         | (column_name 'c1')
+ c2     | bigint                      |           |          |         | (column_name 'c2')
+ c3     | text                        |           |          |         | (column_name 'c3')
+ c5     | timestamp without time zone |           |          |         | (column_name 'c5')
+ c6     | text                        |           |          |         | (column_name 'c6')
+ c7     | text                        |           |          |         | (column_name 'c7')
+ c8     | text                        |           |          |         | (column_name 'c8')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/ft1_null.parquet', sorted 'c1')
 
-               Foreign table "import_dest1.gloc1"
- Column |  Type   | Collation | Nullable | Default | FDW options 
---------+---------+-----------+----------+---------+-------------
- a      | integer |           |          |         | 
- b      | integer |           |          |         | 
+                        Foreign table "import_dest1.ft1_schemaless"
+ Column |            Type             | Collation | Nullable | Default |    FDW options     
+--------+-----------------------------+-----------+----------+---------+--------------------
+ c1     | bigint                      |           |          |         | (column_name 'c1')
+ c2     | bigint                      |           |          |         | (column_name 'c2')
+ c3     | text                        |           |          |         | (column_name 'c3')
+ c5     | timestamp without time zone |           |          |         | (column_name 'c5')
+ c6     | text                        |           |          |         | (column_name 'c6')
+ c7     | text                        |           |          |         | (column_name 'c7')
+ c8     | text                        |           |          |         | (column_name 'c8')
+Server: parquet_s3_srv
+FDW options: (filename 's3://ported_postgres/ft1_schemaless.parquet', sorted 'c1')
+
+                  Foreign table "import_dest1.gloc1"
+ Column |  Type   | Collation | Nullable | Default |    FDW options    
+--------+---------+-----------+----------+---------+-------------------
+ a      | integer |           |          |         | (column_name 'a')
+ b      | integer |           |          |         | (column_name 'b')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/gloc1.parquet', sorted 'c1')
 
-                Foreign table "import_dest1.loc1"
- Column |  Type   | Collation | Nullable | Default | FDW options 
---------+---------+-----------+----------+---------+-------------
- f1     | integer |           |          |         | 
- f2     | text    |           |          |         | 
+                   Foreign table "import_dest1.loc1"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ f1     | integer |           |          |         | (column_name 'f1')
+ f2     | text    |           |          |         | (column_name 'f2')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/loc1.parquet', sorted 'c1')
 
-             Foreign table "import_dest1.local_tbl"
- Column |  Type  | Collation | Nullable | Default | FDW options 
---------+--------+-----------+----------+---------+-------------
- c1     | bigint |           |          |         | 
- c2     | bigint |           |          |         | 
- c3     | text   |           |          |         | 
+                Foreign table "import_dest1.local_tbl"
+ Column |  Type  | Collation | Nullable | Default |    FDW options     
+--------+--------+-----------+----------+---------+--------------------
+ c1     | bigint |           |          |         | (column_name 'c1')
+ c2     | bigint |           |          |         | (column_name 'c2')
+ c3     | text   |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/local_tbl.parquet', sorted 'c1')
 
-                Foreign table "import_dest1.loct"
- Column |  Type   | Collation | Nullable | Default | FDW options 
---------+---------+-----------+----------+---------+-------------
- id     | integer |           |          |         | 
- aa     | text    |           |          |         | 
- bb     | text    |           |          |         | 
+                   Foreign table "import_dest1.loct"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ id     | integer |           |          |         | (column_name 'id')
+ aa     | text    |           |          |         | (column_name 'aa')
+ bb     | text    |           |          |         | (column_name 'bb')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/loct.parquet', sorted 'c1')
 
-               Foreign table "import_dest1.loct1"
- Column |  Type   | Collation | Nullable | Default | FDW options 
---------+---------+-----------+----------+---------+-------------
- id     | integer |           |          |         | 
- f1     | integer |           |          |         | 
- f2     | integer |           |          |         | 
- f3     | integer |           |          |         | 
+                   Foreign table "import_dest1.loct1"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ id     | integer |           |          |         | (column_name 'id')
+ f1     | integer |           |          |         | (column_name 'f1')
+ f2     | integer |           |          |         | (column_name 'f2')
+ f3     | integer |           |          |         | (column_name 'f3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/loct1.parquet', sorted 'c1')
 
-               Foreign table "import_dest1.loct2"
- Column |  Type   | Collation | Nullable | Default | FDW options 
---------+---------+-----------+----------+---------+-------------
- id     | integer |           |          |         | 
- f1     | integer |           |          |         | 
- f2     | integer |           |          |         | 
- f3     | integer |           |          |         | 
+                   Foreign table "import_dest1.loct2"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ id     | integer |           |          |         | (column_name 'id')
+ f1     | integer |           |          |         | (column_name 'f1')
+ f2     | integer |           |          |         | (column_name 'f2')
+ f3     | integer |           |          |         | (column_name 'f3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/loct2.parquet', sorted 'c1')
 
-              Foreign table "import_dest1.loct3"
- Column | Type | Collation | Nullable | Default | FDW options 
---------+------+-----------+----------+---------+-------------
- f1     | text |           |          |         | 
- f2     | text |           |          |         | 
- f3     | text |           |          |         | 
+                 Foreign table "import_dest1.loct3"
+ Column | Type | Collation | Nullable | Default |    FDW options     
+--------+------+-----------+----------+---------+--------------------
+ f1     | text |           |          |         | (column_name 'f1')
+ f2     | text |           |          |         | (column_name 'f2')
+ f3     | text |           |          |         | (column_name 'f3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/loct3.parquet', sorted 'c1')
 
-              Foreign table "import_dest1.loct3_1"
- Column |  Type   | Collation | Nullable | Default | FDW options 
---------+---------+-----------+----------+---------+-------------
- id     | integer |           |          |         | 
- a      | integer |           |          |         | 
- b      | text    |           |          |         | 
+                  Foreign table "import_dest1.loct3_1"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ id     | integer |           |          |         | (column_name 'id')
+ a      | integer |           |          |         | (column_name 'a')
+ b      | text    |           |          |         | (column_name 'b')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/loct3_1.parquet', sorted 'c1')
 
-               Foreign table "import_dest1.loct4"
- Column |  Type   | Collation | Nullable | Default | FDW options 
---------+---------+-----------+----------+---------+-------------
- id     | integer |           |          |         | 
- f1     | integer |           |          |         | 
- f2     | integer |           |          |         | 
- f3     | integer |           |          |         | 
+                   Foreign table "import_dest1.loct4"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ id     | integer |           |          |         | (column_name 'id')
+ f1     | integer |           |          |         | (column_name 'f1')
+ f2     | integer |           |          |         | (column_name 'f2')
+ f3     | integer |           |          |         | (column_name 'f3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/loct4.parquet', sorted 'c1')
 
-              Foreign table "import_dest1.loct4_1"
- Column |  Type   | Collation | Nullable | Default | FDW options 
---------+---------+-----------+----------+---------+-------------
- id     | integer |           |          |         | 
- a      | integer |           |          |         | 
- b      | text    |           |          |         | 
+                  Foreign table "import_dest1.loct4_1"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ id     | integer |           |          |         | (column_name 'id')
+ a      | integer |           |          |         | (column_name 'a')
+ b      | text    |           |          |         | (column_name 'b')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/loct4_1.parquet', sorted 'c1')
 
-            Foreign table "import_dest1.loct_empty"
- Column |  Type  | Collation | Nullable | Default | FDW options 
---------+--------+-----------+----------+---------+-------------
- c1     | bigint |           |          |         | 
- c2     | text   |           |          |         | 
+                Foreign table "import_dest1.loct_empty"
+ Column |  Type  | Collation | Nullable | Default |    FDW options     
+--------+--------+-----------+----------+---------+--------------------
+ c1     | bigint |           |          |         | (column_name 'c1')
+ c2     | text   |           |          |         | (column_name 'c2')
 Server: parquet_s3_srv
 FDW options: (filename 's3://ported_postgres/loct_empty.parquet', sorted 'c1')
 
@@ -11096,7 +11161,7 @@ SELECT server_name FROM parquet_s3_fdw_get_connections() ORDER BY 1;  -- return 
 ALTER SERVER parquet_s3_srv OPTIONS (ADD use_remote_estimate 'off');
 --Testcase 410:
 DROP SERVER parquet_s3_srv_3 CASCADE;
-psql:sql/15.4/parquet_s3_fdw_post.sql:3846: NOTICE:  drop cascades to 2 other objects
+psql:sql/15.4/parquet_s3_fdw_post.sql:3851: NOTICE:  drop cascades to 2 other objects
 DETAIL:  drop cascades to user mapping for public on server parquet_s3_srv_3
 drop cascades to foreign table ft7
 -- List all the existing cached connections. parquet_s3_srv and parquet_s3_srv_3
@@ -11198,7 +11263,7 @@ SELECT parquet_s3_fdw_disconnect('parquet_s3_srv_2');
 -- Return an error as there is no foreign server with given name.
 --Testcase 420:
 SELECT parquet_s3_fdw_disconnect('unknownserver');
-psql:sql/15.4/parquet_s3_fdw_post.sql:3899: ERROR:  server "unknownserver" does not exist
+psql:sql/15.4/parquet_s3_fdw_post.sql:3904: ERROR:  server "unknownserver" does not exist
 -- Let's ensure to close all the existing cached connections.
 --Testcase 421:
 SELECT 1 FROM parquet_s3_fdw_disconnect_all();

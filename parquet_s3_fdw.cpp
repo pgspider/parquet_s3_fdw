@@ -56,6 +56,10 @@ S3RandomAccessFile::Seek(int64_t position)
 arrow::Result<int64_t>
 S3RandomAccessFile::Read(int64_t nbytes, void* out)
 {
+	/* Nothing to read, return immediately */
+	if (nbytes < 1)
+		return nbytes;
+
 	Aws::S3::Model::GetObjectRequest object_request;
 	object_request.WithBucket(bucket_.c_str()).WithKey(object_.c_str());
 	string bytes = "bytes=" + to_string(offset) + "-" + to_string(offset + nbytes - 1);
@@ -89,6 +93,10 @@ S3RandomAccessFile::Read(int64_t nbytes, void* out)
 arrow::Result<std::shared_ptr<arrow::Buffer>>
 S3RandomAccessFile::Read(int64_t nbytes)
 {
+	/* Nothing to read, return immediately */
+	if (nbytes < 1)
+		return std::make_shared<arrow::Buffer>((const uint8_t*) NULL, 0);
+
 	char *out = (char*)malloc(nbytes);
 	arrow::Result<int64_t> res = this->Read(nbytes, out);
 	int64_t n = res.ValueOrDie();
