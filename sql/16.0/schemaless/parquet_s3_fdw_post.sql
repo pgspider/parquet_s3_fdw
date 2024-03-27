@@ -35,12 +35,12 @@ CREATE SCHEMA "S 1";
 IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO "S 1" OPTIONS (sorted 'c1', schemaless 'true');
 
 -- -- Disable autovacuum for these tables to avoid unexpected effects of that
--- ALTER TABLE "S 1"."T1" SET (autovacuum_enabled = 'false');
+-- ALTER TABLE "S 1"."T1_schemaless" SET (autovacuum_enabled = 'false');
 -- ALTER TABLE "S 1"."T2" SET (autovacuum_enabled = 'false');
 -- ALTER TABLE "S 1"."T3" SET (autovacuum_enabled = 'false');
 -- ALTER TABLE "S 1"."T4" SET (autovacuum_enabled = 'false');
 
--- ANALYZE "S 1"."T1";
+-- ANALYZE "S 1"."T1_schemaless";
 -- ANALYZE "S 1"."T2";
 -- ANALYZE "S 1"."T3";
 -- ANALYZE "S 1"."T4";
@@ -48,7 +48,7 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO "S 1" OPTIONS (sorted
 -- ===================================================================
 -- create foreign tables
 -- ===================================================================
-\set var :PATH_FILENAME'/ported_postgres/ft1.parquet'
+\set var :PATH_FILENAME'/ported_postgres/ft1_schemaless.parquet'
 --Testcase 10:
 CREATE FOREIGN TABLE ft1 (
 	c0 int,
@@ -58,7 +58,7 @@ OPTIONS (filename :'var', key_columns 'c1', sorted 'c1', schemaless 'true');
 --Testcase 446:
 ALTER FOREIGN TABLE ft1 DROP COLUMN c0;
 
-\set var :PATH_FILENAME'/ported_postgres/ft1.parquet'
+\set var :PATH_FILENAME'/ported_postgres/ft1_schemaless.parquet'
 --Testcase 11:
 CREATE FOREIGN TABLE ft2 (
   v jsonb,
@@ -262,37 +262,37 @@ SET enable_nestloop TO false;
 -- inner join; expressions in the clauses appear in the equivalence class list
 --Testcase 39:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 JOIN "S 1"."T1" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 JOIN "S 1"."T1_schemaless" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 --Testcase 40:
-SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 JOIN "S 1"."T1" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 JOIN "S 1"."T1_schemaless" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 -- outer join; expressions in the clauses do not appear in equivalence class
 -- list but no output change as compared to the previous query
 --Testcase 41:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 LEFT JOIN "S 1"."T1_schemaless" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 --Testcase 42:
-SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 LEFT JOIN "S 1"."T1" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1 FROM ft2 t1 LEFT JOIN "S 1"."T1_schemaless" t2 ON ((t1.v->>'c1')::int8 = (t2.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 -- A join between local table and foreign join. ORDER BY clause is added to the
 -- foreign join so that the local table can be joined using merge join strategy.
 --Testcase 43:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 left join ft1 t2 join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 --Testcase 44:
-SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 left join ft1 t2 join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 left join ft1 t2 join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 -- Test similar to above, except that the full join prevents any equivalence
 -- classes from being merged. This produces single relation equivalence classes
 -- included in join restrictions.
 --Testcase 45:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 left join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 --Testcase 46:
-SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 left join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 left join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 -- Test similar to above with all full outer joins
 --Testcase 47:
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+	SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 full join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 --Testcase 48:
-SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1 full join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1 full join ft1 t2 full join ft2 t3 on ((t2.v->>'c1')::int8 = (t3.v->>'c1')::int8) on ((t3.v->>'c1')::int8 = (t1.v->>'c1')::int8) OFFSET 100 LIMIT 10;
 --Testcase 453:
 RESET enable_hashjoin;
 --Testcase 454:
@@ -337,9 +337,9 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 t1 WHERE v->>'c8' = 'foo';  -- ca
 -- parameterized remote path for foreign table
 --Testcase 62:
 EXPLAIN (VERBOSE, COSTS OFF)
-  SELECT * FROM "S 1"."T1" a, ft2 b WHERE (a.v->>'c1')::int8 = 47 AND (b.v->>'c1')::int8 = (a.v->>'c2')::int8;
+  SELECT * FROM "S 1"."T1_schemaless" a, ft2 b WHERE (a.v->>'c1')::int8 = 47 AND (b.v->>'c1')::int8 = (a.v->>'c2')::int8;
 --Testcase 63:
-SELECT * FROM "S 1"."T1" a, ft2 b WHERE (a.v->>'c1')::int8 = 47 AND(b.v->>'c1')::int8 = (a.v->>'c2')::int8;
+SELECT * FROM "S 1"."T1_schemaless" a, ft2 b WHERE (a.v->>'c1')::int8 = 47 AND(b.v->>'c1')::int8 = (a.v->>'c2')::int8;
 
 -- check both safe and unsafe join conditions
 --Testcase 64:
@@ -749,9 +749,9 @@ SELECT t1c1, avg(t1c1 + t2c1) FROM (SELECT (t1.v->>'c1')::int8 as c1, (t2.v->>'c
 -- join with lateral reference
 --Testcase 163:
 EXPLAIN (VERBOSE, COSTS OFF)
-SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM ft1 t2, ft2 t3 WHERE (t2.v->>'c1')::int8 = (t3.v->>'c1')::int8 AND (t2.v->>'c2')::int = (t1.v->>'c2')::int) q ORDER BY (t1.v->>'c1')::int8 OFFSET 10 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1, LATERAL (SELECT DISTINCT (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM ft1 t2, ft2 t3 WHERE (t2.v->>'c1')::int8 = (t3.v->>'c1')::int8 AND (t2.v->>'c2')::int = (t1.v->>'c2')::int) q ORDER BY (t1.v->>'c1')::int8 OFFSET 10 LIMIT 10;
 --Testcase 164:
-SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1" t1, LATERAL (SELECT DISTINCT (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM ft1 t2, ft2 t3 WHERE (t2.v->>'c1')::int8 = (t3.v->>'c1')::int8 AND (t2.v->>'c2')::int = (t1.v->>'c2')::int) q ORDER BY (t1.v->>'c1')::int8 OFFSET 10 LIMIT 10;
+SELECT (t1.v->>'c1')::int8 as c1 FROM "S 1"."T1_schemaless" t1, LATERAL (SELECT DISTINCT (t2.v->>'c1')::int8 as c1, (t3.v->>'c1')::int8 as c1 FROM ft1 t2, ft2 t3 WHERE (t2.v->>'c1')::int8 = (t3.v->>'c1')::int8 AND (t2.v->>'c2')::int = (t1.v->>'c2')::int) q ORDER BY (t1.v->>'c1')::int8 OFFSET 10 LIMIT 10;
 
 -- join with pseudoconstant quals, not pushed down.
 EXPLAIN (VERBOSE, COSTS OFF)
@@ -1316,9 +1316,9 @@ select sum((v->>'c2')::int) * (random() <= 1)::int as sum from ft1 order by 1;
 set enable_hashagg to false;
 --Testcase 272:
 explain (verbose, costs off)
-select (v->>'c2')::int as c2, sum from "S 1"."T1" t1, lateral (select sum((t2.v->>'c1')::int8 + (t1.v->>'c1')::int8) sum from ft2 t2 group by (t2.v->>'c1')::int8) qry where (t1.v->>'c2')::int * 2 = qry.sum and (t1.v->>'c2')::int < 3 and (t1.v->>'c1')::int8 < 100 order by 1;
+select (v->>'c2')::int as c2, sum from "S 1"."T1_schemaless" t1, lateral (select sum((t2.v->>'c1')::int8 + (t1.v->>'c1')::int8) sum from ft2 t2 group by (t2.v->>'c1')::int8) qry where (t1.v->>'c2')::int * 2 = qry.sum and (t1.v->>'c2')::int < 3 and (t1.v->>'c1')::int8 < 100 order by 1;
 --Testcase 273:
-select (v->>'c2')::int as c2, sum from "S 1"."T1" t1, lateral (select sum((t2.v->>'c1')::int8 + (t1.v->>'c1')::int8) sum from ft2 t2 group by (t2.v->>'c1')::int8) qry where (t1.v->>'c2')::int * 2 = qry.sum and (t1.v->>'c2')::int < 3 and (t1.v->>'c1')::int8 < 100 order by 1;
+select (v->>'c2')::int as c2, sum from "S 1"."T1_schemaless" t1, lateral (select sum((t2.v->>'c1')::int8 + (t1.v->>'c1')::int8) sum from ft2 t2 group by (t2.v->>'c1')::int8) qry where (t1.v->>'c2')::int * 2 = qry.sum and (t1.v->>'c2')::int < 3 and (t1.v->>'c1')::int8 < 100 order by 1;
 --Testcase 496:
 reset enable_hashagg;
 
@@ -1327,7 +1327,7 @@ reset enable_hashagg;
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT (ref_0.v->>'c2')::int8 AS c2, subq_1.*
 FROM
-    "S 1"."T1" AS ref_0,
+    "S 1"."T1_schemaless" AS ref_0,
     LATERAL (
         SELECT (ref_0.v->>'c1')::int8 c1, subq_0.*
         FROM (SELECT (ref_0.v->>'c2')::int as c2, (ref_1.v->>'c3') as c3
@@ -1339,7 +1339,7 @@ ORDER BY (ref_0.v->>'c1')::int8;
 --Testcase 275:
 SELECT (ref_0.v->>'c2')::int8 AS c2, subq_1.*
 FROM
-    "S 1"."T1" AS ref_0,
+    "S 1"."T1_schemaless" AS ref_0,
     LATERAL (
         SELECT (ref_0.v->>'c1')::int8 c1, subq_0.*
         FROM (SELECT (ref_0.v->>'c2')::int as c2, (ref_1.v->>'c3') as c3
@@ -1478,8 +1478,8 @@ PREPARE st7 AS INSERT INTO ft1 VALUES (json_build_object('c1', 1001, 'c2', 101, 
 --Testcase 498:
 EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st7;
 
--- ALTER TABLE "S 1"."T1" RENAME TO "T0";
-\set var :PATH_FILENAME'/ported_postgres/T0.parquet'
+-- ALTER TABLE "S 1"."T1_schemaless" RENAME TO "T0";
+\set var :PATH_FILENAME'/ported_postgres/T0_schemaless.parquet'
 --Testcase 499:
 ALTER FOREIGN TABLE ft1 OPTIONS (SET filename :'var');
 --Testcase 323:
@@ -1487,8 +1487,8 @@ EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st6;
 --Testcase 324:
 EXECUTE st6;
 -- EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st7;
--- ALTER TABLE "S 1"."T0" RENAME TO "T1";
-\set var :PATH_FILENAME'/ported_postgres/T1.parquet'
+-- ALTER TABLE "S 1"."T0" RENAME TO "T1_schemaless";
+\set var :PATH_FILENAME'/ported_postgres/T1_schemaless.parquet'
 --Testcase 500:
 ALTER FOREIGN TABLE ft1 OPTIONS (SET filename :'var');
 
@@ -1875,7 +1875,7 @@ SELECT * FROM ft2 WHERE (v->>'c1')::int8 % 10 = 8 AND (v->>'c1')::int8 < 1200;
 --Testcase 355:
 select (v->>'c2')::int as c2, count(*) from ft2 where (v->>'c2')::int < 500 group by 1 order by 1;
 --Testcase 356:
-select (v->>'c2')::int as c2, count(*) from "S 1"."T1" where (v->>'c2')::int < 500 group by 1 order by 1;
+select (v->>'c2')::int as c2, count(*) from "S 1"."T1_schemaless" where (v->>'c2')::int < 500 group by 1 order by 1;
 begin;
 --Testcase 556:
 update ft2 set v = json_build_object('c2', 42, 'c3', v->>'c3') where (v->>'c2')::int = 0;
@@ -1910,14 +1910,14 @@ release savepoint s3;
 select (v->>'c2')::int as c2, count(*) from ft2 where (v->>'c2')::int < 500 group by 1 order by 1;
 -- none of the above is committed yet remotely
 --Testcase 365:
-select (v->>'c2')::int as c2, count(*) from "S 1"."T1" where (v->>'c2')::int < 500 group by 1 order by 1;
+select (v->>'c2')::int as c2, count(*) from "S 1"."T1_schemaless" where (v->>'c2')::int < 500 group by 1 order by 1;
 commit;
 --Testcase 366:
 select (v->>'c2')::int as c2, count(*) from ft2 where (v->>'c2')::int < 500 group by 1 order by 1;
 --Testcase 367:
-select (v->>'c2')::int as c2, count(*) from "S 1"."T1" where (v->>'c2')::int < 500 group by 1 order by 1;
+select (v->>'c2')::int as c2, count(*) from "S 1"."T1_schemaless" where (v->>'c2')::int < 500 group by 1 order by 1;
 
--- VACUUM ANALYZE "S 1"."T1";
+-- VACUUM ANALYZE "S 1"."T1_schemaless";
 
 -- Above DMLs add data with v->>'c6' as NULL in ft1, so test ORDER BY NULLS LAST and NULLs
 -- FIRST behavior here.

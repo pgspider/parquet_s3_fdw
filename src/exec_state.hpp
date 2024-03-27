@@ -53,6 +53,7 @@ ParquetS3FdwExecutionState *create_parquet_execution_state(ReaderType reader_typ
                                                          const char *dirname,
                                                          Aws::S3::S3Client *s3_client,
                                                          TupleDesc tuple_desc,
+                                                         Oid relid,
                                                          std::set<int> &attrs_used,
                                                          std::list<SortSupportData> sort_keys,
                                                          bool use_threads,

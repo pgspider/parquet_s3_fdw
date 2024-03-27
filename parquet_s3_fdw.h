@@ -43,7 +43,7 @@
 #define parquet_fdw_use_threads parquet_s3_fdw_use_threads
 
 #define SingleFileExecutionState SingleFileExecutionStateS3
-#define CODE_VERSION 10100
+#define CODE_VERSION 10101
 
 /* Structure to store option information. */
 typedef struct parquet_s3_server_opt
@@ -56,7 +56,7 @@ typedef struct parquet_s3_server_opt
 }			parquet_s3_server_opt;
 
 bool		parquet_s3_is_valid_server_option(DefElem *def);
-parquet_s3_server_opt *parquet_s3_get_options(Oid foreignoid);
+parquet_s3_server_opt *parquet_s3_get_options(Oid foreignoid, Oid userid);
 parquet_s3_server_opt *parquet_s3_get_server_options(Oid serverid);
 
 extern
@@ -73,5 +73,15 @@ int	ExecForeignDDL(Oid serverOid,
 #define SERVER_OPTION_KEEP_CONNECTIONS "keep_connections"
 #define SERVER_OPTION_REGION "region"
 #define SERVER_OPTION_ENDPOINT "endpoint"
+
+/* Option name for key */
+#define ATTRIBUTE_OPTION_KEY "key"
+
+/* Option name for column mapping */
+#define ATTRIBUTE_OPTION_COLUMN_NAME "column_name"
+/* Parquet compression types */
+#define PARQUET_NO_COMPRESSION      "UNCOMPRESSED"
+#define PARQUET_COMPRESSION_SNAPPY  "SNAPPY"
+#define PARQUET_COMPRESSION_ZSTD    "ZSTD"
 
 #endif							/* __PARQUET_S3_FDW_H__ */

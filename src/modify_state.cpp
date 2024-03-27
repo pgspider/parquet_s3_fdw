@@ -31,6 +31,7 @@ extern "C"
  * @param dirname directory path
  * @param s3_client aws s3 client
  * @param tuple_desc tuple descriptor
+ * @param relid relation oid
  * @param target_attrs target attribute
  * @param key_attrs key attribute
  * @param junk_idx junk column index
@@ -44,6 +45,7 @@ ParquetS3FdwModifyState *create_parquet_modify_state(MemoryContext reader_cxt,
                                                      const char *dirname,
                                                      Aws::S3::S3Client *s3_client,
                                                      TupleDesc tuple_desc,
+                                                     Oid relid,
                                                      std::set<int> target_attrs,
                                                      std::set<std::string> key_attrs,
                                                      AttrNumber *junk_idx,
@@ -53,7 +55,7 @@ ParquetS3FdwModifyState *create_parquet_modify_state(MemoryContext reader_cxt,
                                                      std::set<std::string> sorted_cols)
 
 {
-    return new ParquetS3FdwModifyState(reader_cxt, dirname, s3_client, tuple_desc, target_attrs, key_attrs,
+    return new ParquetS3FdwModifyState(reader_cxt, dirname, s3_client, tuple_desc, relid, target_attrs, key_attrs,
                                        junk_idx, use_threads, use_mmap, schemaless, sorted_cols);
 }
 
@@ -64,6 +66,7 @@ ParquetS3FdwModifyState *create_parquet_modify_state(MemoryContext reader_cxt,
  * @param dirname directory path
  * @param s3_client aws s3 client
  * @param tuple_desc tuple descriptor
+ * @param relid relation oid
  * @param target_attrs target attribute
  * @param key_attrs key attribute
  * @param junk_idx junk column index
@@ -76,6 +79,7 @@ ParquetS3FdwModifyState::ParquetS3FdwModifyState(MemoryContext reader_cxt,
                                                  const char *dirname,
                                                  Aws::S3::S3Client *s3_client,
                                                  TupleDesc tuple_desc,
+                                                 Oid relid,
                                                  std::set<int> target_attrs,
                                                  std::set<std::string> key_attrs,
                                                  AttrNumber *junk_idx,
@@ -83,13 +87,13 @@ ParquetS3FdwModifyState::ParquetS3FdwModifyState(MemoryContext reader_cxt,
                                                  bool use_mmap,
                                                  bool schemaless,
                                                  std::set<std::string> sorted_cols)
-    : cxt(reader_cxt), dirname(dirname), s3_client(s3_client), tuple_desc(tuple_desc),
+    : cxt(reader_cxt), dirname(dirname), s3_client(s3_client), tuple_desc(tuple_desc), relid(relid),
       target_attrs(target_attrs), key_names(key_attrs), junk_idx(junk_idx), use_threads(use_threads),
       use_mmap(use_mmap), schemaless(schemaless), sorted_cols(sorted_cols), user_defined_func(NULL)
 { }
 
 /**
- * @brief Destroy the Parquet S 3 Fdw Modify State:: Parquet S3 Fdw Modify State object
+ * @brief Destroy the Parquet S3 Fdw Modify State:: Parquet S3 Fdw Modify State object
  */
 ParquetS3FdwModifyState::~ParquetS3FdwModifyState()
 {
@@ -107,7 +111,7 @@ ParquetS3FdwModifyState::~ParquetS3FdwModifyState()
 void
 ParquetS3FdwModifyState::add_file(const char *filename)
 {
-    ModifyParquetReader *reader = create_modify_parquet_reader(filename, cxt);
+    ModifyParquetReader *reader = create_modify_parquet_reader(filename, cxt, tuple_desc, relid);
 
     if (s3_client)
         reader->open(dirname, s3_client);
@@ -116,7 +120,7 @@ ParquetS3FdwModifyState::add_file(const char *filename)
 
     reader->set_schemaless(schemaless);
     reader->set_sorted_col_list(sorted_cols);
-    reader->create_column_mapping(this->tuple_desc, this->target_attrs);
+    reader->create_column_mapping(this->tuple_desc, this->relid, this->target_attrs);
     reader->set_options(use_threads, use_mmap);
     reader->set_keycol_names(key_names);
 
@@ -141,14 +145,14 @@ ParquetS3FdwModifyState::add_new_file(const char *filename, TupleTableSlot *slot
     else
         new_file_schema = create_new_file_schema(slot);
 
-    reader = create_modify_parquet_reader(filename, cxt, new_file_schema, true);
+    reader = create_modify_parquet_reader(filename, cxt, tuple_desc, relid, new_file_schema, true);
     reader->set_sorted_col_list(sorted_cols);
     reader->set_schemaless(schemaless);
     reader->set_options(use_threads, use_mmap);
     reader->set_keycol_names(key_names);
 
     /* create temporary file */
-    reader->create_column_mapping(this->tuple_desc, this->target_attrs);
+    reader->create_column_mapping(this->tuple_desc, this->relid, this->target_attrs);
     reader->create_new_file_temp_cache();
 
     readers.push_back(reader);
@@ -216,13 +220,12 @@ ParquetS3FdwModifyState::exec_insert(TupleTableSlot *slot)
     /* get value from slot to corresponding vector */
     for (int attnum: target_attrs)
     {
-        char        pg_colname[NAMEDATALEN];
+        char       *pg_colname;
         bool        is_null;
         Datum       attr_value = 0;
         Oid         attr_type;
 
-        tolowercase(NameStr(TupleDescAttr(slot->tts_tupleDescriptor, attnum-1)->attname),
-                    pg_colname);
+        pg_colname = NameStr(TupleDescAttr(slot->tts_tupleDescriptor, attnum-1)->attname);
         attr_value = slot_getattr(slot, attnum, &is_null);
         attr_type = TupleDescAttr(slot->tts_tupleDescriptor, attnum - 1)->atttypid;
 
@@ -339,13 +342,12 @@ ParquetS3FdwModifyState::exec_update(TupleTableSlot *slot, TupleTableSlot *planS
     /* get value from slot to corresponding vector */
     for(int attnum: target_attrs)
     {
-        char        pg_colname[NAMEDATALEN];
+        Form_pg_attribute attr = TupleDescAttr(slot->tts_tupleDescriptor, attnum - 1);
+        char       *pg_colname = NameStr(attr->attname);
         bool        is_null;
         Datum       attr_value = 0;
         Oid         attr_type;
-		Form_pg_attribute attr = TupleDescAttr(slot->tts_tupleDescriptor, attnum - 1);
 
-        tolowercase(NameStr(attr->attname), pg_colname);
         attr_value = slot_getattr(slot, attnum, &is_null);
         attr_type = attr->atttypid;
 
@@ -646,10 +648,7 @@ ParquetS3FdwModifyState::schemaless_create_new_file_schema(TupleTableSlot *slot)
         for (auto reader : readers)
         {
             auto schema = reader->get_file_schema();
-            char            pg_colname[NAMEDATALEN];
-
-            tolowercase(column_names[i].c_str(), pg_colname);
-            auto field = schema->GetFieldByName(pg_colname);
+            auto field = schema->GetFieldByName(column_names[i]);
 
             if (field != nullptr)
             {
@@ -732,14 +731,12 @@ ParquetS3FdwModifyState::create_new_file_schema(TupleTableSlot *slot)
         auto schema = reader->get_file_schema();
         for (int i = 0; i < natts; i++)
         {
-            char            pg_colname[NAMEDATALEN];
             Form_pg_attribute att = TupleDescAttr(this->tuple_desc, i);
 
             if (founds[i] == true || att->attisdropped)
                 continue;
 
-            tolowercase(NameStr(att->attname), pg_colname);
-            auto field = schema->GetFieldByName(pg_colname);
+            auto field = schema->GetFieldByName(NameStr(att->attname));
 
             if (field != nullptr)
             {

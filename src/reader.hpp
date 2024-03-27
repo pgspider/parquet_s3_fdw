@@ -151,6 +151,7 @@ protected:
             arrow::Type::type   type_id;
             std::string         type_name;
             arrow::TimeUnit::type time_precision; /* Only for timestamp column */
+            std::string         column_name;
         } arrow;
 
         struct
@@ -308,7 +309,7 @@ public:
     virtual void close() = 0;
 
     int32_t id();
-    void create_column_mapping(TupleDesc tupleDesc, const std::set<int> &attrs_used);
+    void create_column_mapping(TupleDesc tupleDesc, Oid relid, const std::set<int> &attrs_used);
     void set_rowgroups_list(const std::vector<int> &rowgroups);
     void set_options(bool use_threads, bool use_mmap);
     void set_coordinator(ParallelCoordinator *coord);

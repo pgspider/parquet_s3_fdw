@@ -17,6 +17,7 @@
 #include "arrow/api.h"
 #include "arrow/io/api.h"
 #include "arrow/array.h"
+#include "arrow/util/compression.h"
 #include "parquet/arrow/reader.h"
 #include "parquet/arrow/writer.h"
 #include "parquet/arrow/schema.h"
@@ -52,6 +53,8 @@ extern "C"
  */
 ModifyParquetReader::ModifyParquetReader(const char* filename,
                                          MemoryContext cxt,
+                                         TupleDesc tupleDesc,
+                                         Oid relid,
                                          std::shared_ptr<arrow::Schema> schema,
                                          bool is_new_file,
                                          int reader_id)
@@ -67,6 +70,9 @@ ModifyParquetReader::ModifyParquetReader(const char* filename,
     this->data_is_cached = false;
     this->file_schema = schema;
     this->is_new_file = is_new_file;
+    this->tupleDesc = tupleDesc;
+    this->relid = relid;
+
 }
 
 /**
@@ -90,11 +96,13 @@ ModifyParquetReader::~ModifyParquetReader()
  */
 ModifyParquetReader *create_modify_parquet_reader(const char *filename,
                                                   MemoryContext cxt,
+                                                  TupleDesc tupleDesc,
+                                                  Oid relid,
                                                   std::shared_ptr<arrow::Schema> schema,
                                                   bool is_new_file,
                                                   int reader_id)
 {
-    return new ModifyParquetReader(filename, cxt, schema, is_new_file, reader_id);
+    return new ModifyParquetReader(filename, cxt, tupleDesc, relid, schema, is_new_file, reader_id);
 }
 
 /**
@@ -719,14 +727,12 @@ ModifyParquetReader::cache_parquet_file_data()
                 /* Get column name */
                 auto field = manifest.schema_fields[i].field;
                 auto field_name = field->name();
-                char arrow_colname[NAMEDATALEN];
 
                 if (field_name.length() > NAMEDATALEN - 1)
                     throw Error("parquet column name '%s' is too long (max: %d)",
                                 field_name.c_str(), NAMEDATALEN - 1);
-                tolowercase(field_name.c_str(), arrow_colname);
 
-                this->cache_data->columnNames[i] = std::string(arrow_colname);
+                this->cache_data->columnNames[i] = field_name;
 
                 /* Get values in columns */
                 read_column(tmptable, i, &this->types[i],
@@ -1214,7 +1220,7 @@ ModifyParquetReader::builder_append_primitive_type(arrow::ArrayBuilder *builder,
  * @param table source table
  */
 void
-ModifyParquetReader::parquet_write_file(const char *dirname, Aws::S3::S3Client *s3_client, const arrow::Table& table)
+ModifyParquetReader::parquet_write_file(const char *dirname, Aws::S3::S3Client *s3_client, const arrow::Table& table, std::shared_ptr<parquet::WriterProperties> props)
 {
     try
     {
@@ -1254,7 +1260,7 @@ ModifyParquetReader::parquet_write_file(const char *dirname, Aws::S3::S3Client *
         PARQUET_ASSIGN_OR_THROW(outfile, arrow::io::FileOutputStream::Open(local_path));
         const int64_t chunk_size = std::max(static_cast<int64_t>(1), table.num_rows());
 
-        PARQUET_THROW_NOT_OK(parquet::arrow::WriteTable(table, arrow::default_memory_pool(), outfile, chunk_size));
+        PARQUET_THROW_NOT_OK(parquet::arrow::WriteTable(table, arrow::default_memory_pool(), outfile, chunk_size, props));
 
         /* Upload to S3 system if needed */
         if (s3_client)
@@ -1368,6 +1374,210 @@ ModifyParquetReader::create_arrow_table()
 }
 
 /**
+ * @brief Set compression for table
+ *
+ * @return std::shared_ptr<parquet::WriterProperties>
+ */
+std::shared_ptr<parquet::WriterProperties>
+ModifyParquetReader::set_table_compression()
+{
+    auto builder = parquet::WriterProperties::Builder();
+    bool table_compression = false;
+    bool column_compression = false;
+    ForeignTable *table = GetForeignTable(this->relid);
+    ListCell *lc_tbl;
+
+    /*
+     * Set compression for the whole table (apply for both non-schemaless and schemaless mode)
+     */
+    foreach(lc_tbl, table->options)
+    {
+        DefElem *def = (DefElem *)lfirst(lc_tbl);
+
+        if (strcmp(def->defname, "compression_type") == 0)
+        {
+            char *table_compression_name = defGetString(def);
+            auto table_compression_type = get_compression_type_by_name(table_compression_name);
+
+            elog(DEBUG2, "parquet_s3_fdw: set compression type '%s' at table level", table_compression_name);
+            builder.compression(table_compression_type);
+            table_compression = true;
+
+            break;
+        }
+    }
+
+    /* Set column compression */
+    if (this->schemaless)
+    {
+        /* Get compression type from column option and set for the whole table */
+        for (int i = 0; i < this->tupleDesc->natts; i++)
+        {
+            Form_pg_attribute att = TupleDescAttr(this->tupleDesc, i);
+            AttrNumber attrno = att->attnum;
+
+            /* Ignore dropped columns. */
+            if (att->attisdropped)
+                continue;
+
+            column_compression = set_column_compression(&builder, attrno);
+            break;
+        }
+
+        /* Retain the existing compression */
+        if (table_compression == false && column_compression == false && this->is_new_file == false)
+        {
+            for (size_t col_idx = 0; col_idx < this->cache_data->column_num; col_idx++)
+            {
+                retain_column_compression(&builder, col_idx);
+            }
+        }
+    }
+    else /* Non schemaless */
+    {
+        for (size_t col_idx = 0; col_idx < this->cache_data->column_num; col_idx++)
+        {
+            auto col_name = this->cache_data->columnNames[col_idx];
+            column_compression = false;
+
+            if (col_name.length() > NAMEDATALEN - 1)
+                throw Error("parquet column name '%s' is too long (max: %d)",
+                            col_name.c_str(), NAMEDATALEN - 1);
+
+            /* Get compression type from column option */
+            for (int i = 0; i < this->tupleDesc->natts; i++)
+            {
+                Form_pg_attribute att = TupleDescAttr(this->tupleDesc, i);
+                AttrNumber attrno = att->attnum;
+                const char *attname = NameStr(TupleDescAttr(this->tupleDesc, i)->attname);
+
+                /* Ignore dropped columns. */
+                if (att->attisdropped)
+                    continue;
+
+                /* Column mapping found */
+                if (strcmp(attname, col_name.c_str()) == 0)
+                {
+                    column_compression = set_column_compression(&builder, attrno, col_idx);
+                    break;
+                }
+            }
+
+            /* Retain the existing compression */
+            if (table_compression == false && column_compression == false && this->is_new_file == false)
+            {
+                retain_column_compression(&builder, col_idx);
+            }
+        }
+    }
+
+    return builder.build();
+}
+
+/**
+ * @brief set column compression
+ *
+ * @param builder use to write properties to parquet file
+ * @param attrno column index of the foreign table
+ * @param col_idx column index of the parquet file. Not use in schemaless mode.
+ * @return true if compression option is found.
+ */
+bool
+ModifyParquetReader::set_column_compression(parquet::WriterProperties::Builder *builder, AttrNumber attrno, size_t col_idx)
+{
+    List *options;
+    ListCell *lc_col;
+
+    /* look for the "compression_type" option on this column */
+    options = GetForeignColumnOptions(this->relid, attrno);
+    foreach (lc_col, options)
+    {
+        DefElem *def = (DefElem *)lfirst(lc_col);
+
+        if (strcmp(def->defname, "compression_type") == 0)
+        {
+            char *compression_name = defGetString(def);
+
+            /* Get compression type by compression name */
+            auto column_compression_type = get_compression_type_by_name(compression_name);
+
+            /* Set new compression */
+            if (this->schemaless)
+            {
+                elog(DEBUG2, "parquet_s3_fdw: set new compression type '%s' for all columns in schemaless mode", compression_name);
+                builder->compression(column_compression_type);
+            }
+            else
+            {
+                elog(DEBUG2, "parquet_s3_fdw: set new compression type '%s' at column %s", compression_name, this->cache_data->columnNames[col_idx].c_str());
+                builder->compression(this->cache_data->columnNames[col_idx], column_compression_type);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief retain column compression
+ *
+ * @param builder use to set compression in the parquet file
+ * @param col_idx column index
+ */
+void
+ModifyParquetReader::retain_column_compression(parquet::WriterProperties::Builder *builder, size_t col_idx)
+{
+    /* Every rowgroup has the same column properties, using the first rowgroup to get column properties */
+    auto meta = this->reader->parquet_reader()->metadata();
+    auto rowgroup = meta->RowGroup(0);
+
+    /* Get the existing compression */
+    auto column = rowgroup->ColumnChunk(col_idx);
+    auto column_compression_type = column->compression();
+    char *column_compression_name = get_compression_name_by_type(column_compression_type);
+
+    /* Set the existing compression */
+    elog(DEBUG2, "parquet_s3_fdw: retain compression type %s at column %s", column_compression_name, this->cache_data->columnNames[col_idx].c_str());
+    builder->compression(this->cache_data->columnNames[col_idx], column_compression_type);
+}
+
+/**
+ * @brief get compression type by name
+ *
+ * @param compression_name compression type name
+ */
+arrow::Compression::type
+ModifyParquetReader::get_compression_type_by_name (char *compression_name)
+{
+    if (pg_strcasecmp(compression_name, PARQUET_NO_COMPRESSION) == 0)
+        return arrow::Compression::UNCOMPRESSED;
+    else if (pg_strcasecmp(compression_name, PARQUET_COMPRESSION_ZSTD) == 0)
+        return arrow::Compression::ZSTD;
+    else if (pg_strcasecmp(compression_name, PARQUET_COMPRESSION_SNAPPY) == 0)
+        return arrow::Compression::SNAPPY;
+    else
+        elog(ERROR, "parquet_s3_fdw: compression type %s is not supported. ZSTD, SNAPPY and UNCOMPRESSED are supported. ", compression_name);
+}
+
+/**
+ * @brief get compression name by type
+ *
+ * @param compression_type compression type
+ */
+char *
+ModifyParquetReader::get_compression_name_by_type(arrow::Compression::type compression_type)
+{
+    if (compression_type == arrow::Compression::UNCOMPRESSED)
+        return (char*) PARQUET_NO_COMPRESSION;
+    else if (compression_type == arrow::Compression::ZSTD)
+        return (char*) PARQUET_COMPRESSION_ZSTD;
+    else if (compression_type == arrow::Compression::SNAPPY)
+        return (char*) PARQUET_COMPRESSION_SNAPPY;
+    else
+        elog(ERROR, "parquet_s3_fdw: compression type is not supported");
+}
+
+/**
  * @brief upload cached data to storage system
  *
  * @param dirname directory path
@@ -1382,16 +1592,17 @@ ModifyParquetReader::upload(const char *dirname, Aws::S3::S3Client *s3_client)
         return;
 
     std::shared_ptr<arrow::Table> table = create_arrow_table();
+    std::shared_ptr<parquet::WriterProperties> props = set_table_compression();
 
     INSTR_TIME_SET_CURRENT(start);
     /* Upload file to the storage system */
-    parquet_write_file(dirname, s3_client, *table);
+    parquet_write_file(dirname, s3_client, *table, props);
     INSTR_TIME_SET_CURRENT(duration);
     INSTR_TIME_SUBTRACT(duration, start);
 #if PG_VERSION_NUM >= 160000
-    elog(DEBUG1, "'%s' file has been uploaded in %ld seconds %ld microseconds.", this->filename.c_str(), (long int) INSTR_TIME_GET_DOUBLE(duration), (long int) INSTR_TIME_GET_MICROSEC(duration));
+    elog(DEBUG3, "'%s' file has been uploaded in %ld seconds %ld microseconds.", this->filename.c_str(), (long int) INSTR_TIME_GET_DOUBLE(duration), (long int) INSTR_TIME_GET_MICROSEC(duration));
 #else
-    elog(DEBUG1, "'%s' file has been uploaded in %ld seconds %ld microseconds.", this->filename.c_str(), duration.tv_sec, duration.tv_nsec / 1000);
+    elog(DEBUG3, "'%s' file has been uploaded in %ld seconds %ld microseconds.", this->filename.c_str(), duration.tv_sec, duration.tv_nsec / 1000);
 #endif
 }
 
@@ -1568,15 +1779,9 @@ ModifyParquetReader::is_right_position_in_sorted_column_voidp(void **row, bool *
         if (row_idx > col_len)
             return false;
 
-        for (size_t attr_idx = 0; attr_idx < row_len; attr_idx++)
-        {
-            if (this->map[attr_idx] == column_idx)
-            {
-                value = row[attr_idx];
-                value_null = is_nulls[attr_idx];
-                break;
-            }
-        }
+        /* Get value of sorted column in current row */
+        value = row[column_idx];
+        value_null = is_nulls[column_idx];
 
         if (value_null == true)
         {
@@ -1685,7 +1890,7 @@ ModifyParquetReader::schemaless_parse_column(Datum attr_value, std::vector<int> 
     jbvType     *col_types;
     bool        *col_isnulls;
     size_t      len;
-    std::set<std::string> col_names;
+    std::vector<std::string> col_names;
     std::vector<int> col_attrnum;
 
     parquet_parse_jsonb(&jb->root, &cols, &col_vals, &col_types, &col_isnulls, &len);
@@ -1708,7 +1913,7 @@ ModifyParquetReader::schemaless_parse_column(Datum attr_value, std::vector<int> 
         if (key_idx < this->keycol_names.size() && col_types[col_idx] == jbvNull)
             elog(ERROR, "parquet_s3_fdw: key column %s must not be NULL.", str);
 
-        col_names.insert(str);
+        col_names.push_back(str);
         col_attrnum.push_back(iterator->second);
 
         if (attrs != nullptr)
@@ -1737,7 +1942,7 @@ ModifyParquetReader::schemaless_parse_column(Datum attr_value, std::vector<int> 
     {
         for (std::string key: this->keycol_names)
         {
-            size_t key_idx = std::distance(col_names.begin(), col_names.find(key));
+            size_t key_idx = std::distance(col_names.begin(), std::find(col_names.begin(), col_names.end(), key));
             if (key_idx >= col_names.size() || col_types[key_idx] == jbvNull)
             {
                 elog(ERROR, "parquet_s3_fdw: key column %s must not be NULL.", key.c_str());
@@ -2331,23 +2536,21 @@ ModifyParquetReader::schemaless_create_column_mapping(std::shared_ptr<arrow::Sch
     {
         auto        schema_field = schema->fields()[arrow_col_idx];
         std::string field_name = schema_field->name();
-        char        arrow_colname[NAMEDATALEN];
 
         if (field_name.length() > NAMEDATALEN - 1)
             throw Error("parquet column name '%s' is too long (max: %d)",
                         field_name.c_str(), NAMEDATALEN - 1);
-        tolowercase(field_name.c_str(), arrow_colname);
 
-        this->column_names.push_back(arrow_colname);
+        this->column_names.push_back(field_name);
 
         /* arrow column index */
         this->map[arrow_col_idx] = arrow_col_idx;
 
         /* index of last element */
-        this->column_name_map.insert({arrow_colname, arrow_col_idx});
+        this->column_name_map.insert({field_name, arrow_col_idx});
 
         /* create mapping between sorted attributes and parquet column index */
-        size_t sorted_col_idx = std::distance(sorted_cols.begin(), sorted_cols.find(arrow_colname));
+        size_t sorted_col_idx = std::distance(sorted_cols.begin(), sorted_cols.find(field_name));
         if (sorted_col_idx < sorted_cols.size())
             this->sorted_col_map[sorted_col_idx] = arrow_col_idx;
     }
@@ -2359,10 +2562,11 @@ ModifyParquetReader::schemaless_create_column_mapping(std::shared_ptr<arrow::Sch
  *        Create cast for postgres column type -> parquet mapped type.
  *
  * @param tupleDesc tuple descriptor
+ * @param relid relation oid
  * @param attrs_used attribute in used (unused for ModifyParquetReader)
  */
 void
-ModifyParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<int> &attrs_used)
+ModifyParquetReader::create_column_mapping(TupleDesc tupleDesc, Oid relid, const std::set<int> &attrs_used)
 {
     std::shared_ptr<arrow::Schema>  schema;
 
@@ -2405,12 +2609,30 @@ ModifyParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<i
 
     for (int i = 0; i < tupleDesc->natts; i++)
     {
-        char        pg_colname[NAMEDATALEN];
-        const char *attname = NameStr(TupleDescAttr(tupleDesc, i)->attname);
+        Form_pg_attribute attr = TupleDescAttr(tupleDesc, i);
+        /* Using foreign table column name to mapping as default */
+        char        *pg_colname = NameStr(attr->attname);
+        List        *options = NIL;
+        ListCell    *lc;
 
         this->map[i] = -1;
 
-        tolowercase(NameStr(TupleDescAttr(tupleDesc, i)->attname), pg_colname);
+        /* Skip dropped attribute */
+        if (attr->attisdropped)
+            continue;
+
+        /* If column_name option is used, get column name from the defined option */
+        options = GetForeignColumnOptions(relid, i + 1);
+        foreach (lc, options)
+        {
+            DefElem *def = (DefElem *)lfirst(lc);
+
+            if (strcmp(def->defname, ATTRIBUTE_OPTION_COLUMN_NAME) == 0)
+            {
+                pg_colname = defGetString(def);
+                break;
+            }
+        }
 
         for (size_t arrow_col_idx = 0; arrow_col_idx < schema->fields().size(); arrow_col_idx++)
         {
@@ -2421,7 +2643,8 @@ ModifyParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<i
             if (field_name.length() > NAMEDATALEN - 1)
                 throw Error("parquet column name '%s' is too long (max: %d)",
                             field_name.c_str(), NAMEDATALEN - 1);
-            tolowercase(field_name.c_str(), arrow_colname);
+
+            strcpy(arrow_colname, field_name.c_str());
 
             /*
              * Compare postgres attribute name to the column name in arrow
@@ -2474,7 +2697,7 @@ ModifyParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<i
                     initialize_postgres_to_parquet_cast(typinfo.children[0], pg_colname);
                 }
                 else
-                    initialize_postgres_to_parquet_cast(typinfo, attname);
+                    initialize_postgres_to_parquet_cast(typinfo, pg_colname);
 
                 break;
             }

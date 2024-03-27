@@ -74,6 +74,7 @@ private:
     MemoryContext       cxt;
     ParallelCoordinator *coord;
     TupleDesc           tuple_desc;
+    Oid                 relid;
     std::set<int>       attrs_used;
     bool                use_mmap;
     bool                use_threads;
@@ -90,13 +91,14 @@ public:
                              const char *dirname,
                              Aws::S3::S3Client *s3_client,
                              TupleDesc tuple_desc,
+                             Oid relid,
                              std::set<int> attrs_used,
                              bool use_threads,
                              bool use_mmap,
                              bool schemaless,
                              std::set<std::string> slcols,
                              std::set<std::string> sorted_cols)
-        : cxt(cxt), tuple_desc(tuple_desc), attrs_used(attrs_used),
+        : cxt(cxt), tuple_desc(tuple_desc), relid(relid), attrs_used(attrs_used),
           use_mmap(use_mmap), use_threads(use_threads),
           dirname(dirname), s3_client(s3_client), schemaless(schemaless),
           slcols(slcols), sorted_cols(sorted_cols)
@@ -139,7 +141,7 @@ public:
         else
             reader->open();
         reader->set_schemaless_info(schemaless, slcols, sorted_cols);
-        reader->create_column_mapping(tuple_desc, attrs_used);
+        reader->create_column_mapping(tuple_desc, relid, attrs_used);
     }
 
     void set_coordinator(ParallelCoordinator *coord)
@@ -177,6 +179,7 @@ private:
 
     MemoryContext           cxt;
     TupleDesc               tuple_desc;
+    Oid                     relid;
     std::set<int>           attrs_used;
     bool                    use_threads;
     bool                    use_mmap;
@@ -212,7 +215,7 @@ private:
         else
             r->open();
         r->set_schemaless_info(schemaless, slcols, sorted_cols);
-        r->create_column_mapping(tuple_desc, attrs_used);
+        r->create_column_mapping(tuple_desc, relid, attrs_used);
 
         cur_reader++;
 
@@ -224,13 +227,14 @@ public:
                             const char *dirname,
                             Aws::S3::S3Client *s3_client,
                             TupleDesc tuple_desc,
+                            Oid relid,
                             std::set<int> attrs_used,
                             bool use_threads,
                             bool use_mmap,
                             bool schemaless,
                             std::set<std::string> slcols,
                             std::set<std::string> sorted_cols)
-        : reader(NULL), cur_reader(0), cxt(cxt), tuple_desc(tuple_desc),
+        : reader(NULL), cur_reader(0), cxt(cxt), tuple_desc(tuple_desc), relid(relid),
           attrs_used(attrs_used), use_threads(use_threads), use_mmap(use_mmap),
           coord(NULL), dirname(dirname), s3_client(s3_client), schemaless(schemaless),
           slcols(slcols), sorted_cols(sorted_cols)
@@ -337,6 +341,7 @@ protected:
 
     MemoryContext       cxt;
     TupleDesc           tuple_desc;
+    Oid                 relid;
     std::set<int>       attrs_used;
     std::list<SortSupportData> sort_keys;
     bool                use_threads;
@@ -502,6 +507,7 @@ public:
                                  const char *dirname,
                                  Aws::S3::S3Client *s3_client,
                                  TupleDesc tuple_desc,
+                                 Oid relid,
                                  std::set<int> attrs_used,
                                  std::list<SortSupportData> sort_keys,
                                  bool use_threads,
@@ -512,6 +518,7 @@ public:
     {
         this->cxt = cxt;
         this->tuple_desc = tuple_desc;
+        this->relid = relid;
         this->dirname = dirname;
         this->s3_client = s3_client;
         this->attrs_used = attrs_used;
@@ -607,7 +614,7 @@ public:
         else
             r->open();
         r->set_schemaless_info(schemaless, slcols, sorted_cols);
-        r->create_column_mapping(tuple_desc, attrs_used);
+        r->create_column_mapping(tuple_desc, relid, attrs_used);
         readers.push_back(r);
     }
 };
@@ -659,7 +666,7 @@ private:
 
             activate_reader(reader);
             reader->set_schemaless_info(schemaless, slcols, sorted_cols);
-            reader->create_column_mapping(tuple_desc, attrs_used);
+            reader->create_column_mapping(tuple_desc, relid, attrs_used);
 
             if (reader->next(rs.slot) == RS_SUCCESS)
             {
@@ -729,6 +736,7 @@ public:
                                         const char *dirname,
                                         Aws::S3::S3Client *s3_client,
                                         TupleDesc tuple_desc,
+                                        Oid relid,
                                         std::set<int> attrs_used,
                                         std::list<SortSupportData> sort_keys,
                                         bool use_threads,
@@ -743,6 +751,7 @@ public:
         this->dirname = dirname;
         this->s3_client = s3_client;
         this->tuple_desc = tuple_desc;
+        this->relid = relid;
         this->attrs_used = attrs_used;
         this->sort_keys = sort_keys;
         this->use_threads = use_threads;
@@ -855,6 +864,7 @@ ParquetS3FdwExecutionState *create_parquet_execution_state(ReaderType reader_typ
                                                          const char *dirname,
                                                          Aws::S3::S3Client *s3_client,
                                                          TupleDesc tuple_desc,
+                                                         Oid relid,
                                                          std::set<int> &attrs_used,
                                                          std::list<SortSupportData> sort_keys,
                                                          bool use_threads,
@@ -869,19 +879,19 @@ ParquetS3FdwExecutionState *create_parquet_execution_state(ReaderType reader_typ
         case RT_TRIVIAL:
             return new TrivialExecutionStateS3();
         case RT_SINGLE:
-            return new SingleFileExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc,
+            return new SingleFileExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc, relid,
                                                          attrs_used, use_threads,
                                                          use_mmap, schemaless, slcols, sorted_cols);
         case RT_MULTI:
-            return new MultifileExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc,
+            return new MultifileExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc, relid,
                                                         attrs_used, use_threads,
                                                         use_mmap, schemaless, slcols, sorted_cols);
         case RT_MULTI_MERGE:
-            return new MultifileMergeExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc,
+            return new MultifileMergeExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc, relid,
                                                         attrs_used, sort_keys, 
                                                         use_threads, use_mmap, schemaless, slcols, sorted_cols);
         case RT_CACHING_MULTI_MERGE:
-            return new CachingMultifileMergeExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc,
+            return new CachingMultifileMergeExecutionStateS3(reader_cxt, dirname, s3_client, tuple_desc, relid,
                                                            attrs_used, sort_keys, 
                                                            use_threads, use_mmap,
                                                            max_open_files, schemaless, slcols, sorted_cols);

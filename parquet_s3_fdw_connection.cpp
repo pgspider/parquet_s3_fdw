@@ -550,7 +550,7 @@ parquetGetConnectionByTableid(Oid foreigntableid, Oid userid)
 
         Assert(userid != InvalidOid);
         user = GetUserMapping(userid, fserver->serverid);
-        options = parquet_s3_get_options(foreigntableid);
+        options = parquet_s3_get_options(foreigntableid, userid);
         s3client = parquetGetConnection(user, options->use_minio);
     }
     return s3client;

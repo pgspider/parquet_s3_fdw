@@ -128,3 +128,21 @@ table = pa.Table.from_pandas(df, schema)
 
 with pq.ParquetWriter('complex/example4.parquet', table.schema) as writer:
     writer.write_table(table)
+
+# init data for column name mapping
+df = pd.DataFrame({'C 1': [1, 2, 3],
+                    'c2': [1, 2, 3],
+                    'c3': ['foo', 'bar', 'baz']})
+table = pa.Table.from_pandas(df)
+
+with pq.ParquetWriter('column_name/ftcol.parquet', table.schema) as writer:
+    writer.write_table(table)
+
+# case-sensive column name
+df = pd.DataFrame({'UPPER': ['UPPER', 'CASE', 'DATA'],
+                    'lower': ['lower', 'case', 'data'],
+                    'MiXiNg': ['MixinG', 'CaSe', 'dAtA']})
+table = pa.Table.from_pandas(df)
+
+with pq.ParquetWriter('column_name/case-sensitive.parquet', table.schema) as writer:
+    writer.write_table(table)

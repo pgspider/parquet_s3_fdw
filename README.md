@@ -3,7 +3,7 @@
 This PostgreSQL extension is a Foreign Data Wrapper (FDW) for accessing Parquet file on local file system and [Amazon S3][2].
 This version of parquet_s3_fdw can work for PostgreSQL 13, 14, 15 and 16.0.
 
-Read-only Apache Parquet foreign data wrapper supporting S3 access for PostgreSQL.
+Apache Parquet foreign data wrapper supporting S3 access for PostgreSQL.
 
 
 ## Installation
@@ -22,7 +22,9 @@ Please refer to [building guide](https://github.com/apache/arrow/blob/master/doc
 Please refer to [bulding guide](https://docs.aws.amazon.com/sdk-for-cpp/v1/developer-guide/setup-linux.html)
 
 Attention!  
-We reccomend to build `libarrow`, `libparquet` and `AWS SDK for C++` from the source code. We failed to link if using pre-compiled binaries because gcc version is different between arrow and AWS SDK.
+- We recommend to build `libarrow`, `libparquet` and `AWS SDK for C++` from the source code. We failed to link if using pre-compiled binaries because gcc version is different between arrow and AWS SDK.
+
+- Build `libarrow` with the options -DARROW_WITH_SNAPPY=ON, -DARROW_WITH_ZSTD=ON to support compression with SNAPPY and ZSTD.
 
 ### 3. Build and install parquet_s3_fdw
 ```sh
@@ -79,7 +81,7 @@ Currently `parquet_s3_fdw` doesn't support structs and nested lists.
 Following options are supported:
 * **filename** - space separated list of paths to Parquet files to read. You can specify the path on AWS S3 by starting with `s3://`. The mix of local path and S3 path is not supported;
 * **dirname** - path to directory having Parquet files to read;
-* **sorted** - space separated list of columns that Parquet files are presorted by; that would help postgres to avoid redundant sorting when running query with `ORDER BY` clause or in other cases when having a presorted set is beneficial (Group Aggregate, Merge Join);
+* **sorted** - space separated list of columns that Parquet files are presorted by; that would help postgres to avoid redundant sorting when running query with `ORDER BY` clause or in other cases when having a presorted set is beneficial (Group Aggregate, Merge Join); If column has space character in the name, the column name must be double quoted to differentiate space character among columns.
 * **files_in_order** - specifies that files specified by `filename` or returned by `files_func` are ordered according to `sorted` option and have no intersection rangewise; this allows to use `Gather Merge` node on top of parallel Multifile scan (default `false`);
 * **use_mmap** - whether memory map operations will be used instead of file read operations (default `false`);
 * **use_threads** - enables Apache Arrow's parallel columns decoding/decompression (default `false`);
@@ -88,6 +90,9 @@ Following options are supported:
 * **max_open_files** - the limit for the number of Parquet files open simultaneously.
 * **region** - the value of AWS region used to connect to (default `ap-northeast-1`).
 * **endpoint** - the address and port used to connect to (default `127.0.0.1:9000`).
+* **key** - column option, indicates a column as a part of primary key or unique key of parquet file
+* **column_name** - (string) This option, which can be specified for a column of a foreign table, gives the column name to use for the column on the parquet file. If this option is omitted, the column's name is used.
+* **compression_type** - the compression is used for table and column.
 
 Foreign table may be created for a single Parquet file and for a set of files. It is also possible to specify a user defined function, which would return a list of file paths. Depending on the number of files and table options `parquet_s3_fdw` may use one of the following execution strategies:
 
@@ -123,6 +128,35 @@ SELECT * FROM userdata;
 
 ## Parallel queries
 `parquet_s3_fdw` also supports [parallel query execution](https://www.postgresql.org/docs/current/parallel-query.html) (not to confuse with multi-threaded decoding feature of Apache Arrow).
+
+## Row group filter
+Apache Parquet has logical horizontal partitioning of the data into ['row group'](https://parquet.apache.org/docs/concepts/). `parquet_s3_fdw` can filter `row group` by condition in `WHERE` clause, this is a performance feature (not to confuse with `WHERE` clause push-down). Folowing conditions can be supported:
+- `EXPR OP CONST`
+- `CONST OP EXPR`
+- `BOOL_VAR` or `BOOL_VAR = true`
+- `!BOOL_VAR` or `BOOL_VAR = false`
+
+For example:
+```sql
+-- only row group 1 will be read
+EXPLAIN VERBOSE
+SELECT * FROM example1 WHERE one <= 1;
+DEBUG:  parquet_s3_fdw: skip rowgroup 2
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Foreign Scan on public.example1  (cost=0.00..0.03 rows=2 width=93)
+   Output: one, two, three, four, five, six, seven
+   Filter: (example1.one <= 1)
+   Reader: Single File
+   Row groups: 1
+(5 rows)
+```
+
+Limitation:
+- Currently only Var (foreign table column) as expression is supported. Will be extended in future.
+- Do not support filter with `string` column in parquet file.
+
+For schemaless mode refer [this](#schemaless-mode).
 
 ## Import
 `parquet_s3_fdw` also supports [`IMPORT FOREIGN SCHEMA`](https://www.postgresql.org/docs/current/sql-importforeignschema.html) command to discover parquet files in the specified directory on filesystem and create foreign tables according to those files. It can be used as follows:
@@ -388,6 +422,16 @@ OPTIONS (
 ### Sorted columns:
 parquet_s3_fdw supports keeping the sorted column still sorted in the modify feature.
 
+Column name is double quoted if it has space character.
+
+```sql
+CREATE FOREIGN TABLE example (
+    'C 1'        int,
+    c2           int
+) SERVER parquet_s3_srv
+OPTIONS (
+    filename 's3://bucket/dir/exampe.parquet' sorted '"C 1"');
+```
 ### Parquet file schema:
 Basically, the parquet file schema is defined according to a list of column names and corresponding types, but in parquet_s3_fdw's scan, it assumes that all columns with the same name have the same type. So, in modify feature, this assumption will be use also.
 
@@ -548,6 +592,71 @@ SELECT * FROM example_schemaless;
  {"c1": 3, "c2": "values are fun!", "c3": "t"}
 (2 rows)
 ```
+### Compression
+- Support 03 compression options: zstd, snappy and uncompressed. Compression options can be specified at both column and table.
+- If there is no compression option
+  - In case of existed file, the original compression of parquet file will be retained.
+  - In case of new created file, the default compression is uncompressed.
+- If there is only table compression option, the compression will be applied to all columns.
+- If there are both table and column options, the compression at column level will be prioritized to use.
+- If there is column compression option:
+  - In non-schemaless mode, the compression will be applied to the specified column only. Compression in other columns will be retained.
+  - In schemaless mode, the compression will be applied to all columns of parquet file.
+
+- Example about compression for both table and column in non-schemaless mode.
+  - 'snappy' will be applied to column c1 and c3 and 'zstd' will be applied to column c2.
+```sql
+-- non-schemaless mode
+CREATE FOREIGN TABLE example_insert (
+    c1 INT2 OPTIONS (key 'true'),
+    c2 TEXT OPTIONS (compression_type 'zstd'),
+    c3 BOOLEAN
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example_insert.parquet', compression_type 'snappy');
+```
+
+- Example about compression for both table and column in schemaless mode.
+  - 'zstd' will be applied to all columns.
+```sql
+-- schemaless mode
+CREATE FOREIGN TABLE example_insert (
+    v jsonb OPTIONS (compression_type 'zstd'),
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example_insert.parquet', compression_type 'snappy');
+```
+
+- Example about compression for column
+  - 'zstd' is applied to column c2, the original format is retained by c1 and c3 in non-schemaless mode
+  - 'zstd' is applied to all columns in schemaless mode
+```sql
+-- non-schemaless mode
+CREATE FOREIGN TABLE example_insert (
+    c1 INT2 OPTIONS (key 'true'),
+    c2 TEXT OPTIONS (compression_type 'zstd'),
+    c3 BOOLEAN
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example_insert.parquet');
+
+-- schemaless mode
+CREATE FOREIGN TABLE example_insert (
+    v jsonb OPTIONS (compression_type 'zstd'),
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example_insert.parquet');
+```
+
+- Example about compression for table
+  - 'zstd' is applied to all columns
+
+```sql
+-- non-schemaless mode
+CREATE FOREIGN TABLE example_insert (
+    c1 INT2 OPTIONS (key 'true'),
+    c2 TEXT,
+    c3 BOOLEAN
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example_insert.parquet', compression_type 'zstd');
+
+-- schemaless mode
+CREATE FOREIGN TABLE example_insert (
+    v jsonb,
+) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example_insert.parquet', compression_type 'zstd');
+```
+
 ## Limitations
 - Transaction is not supported.
 - Cannot create a single foreign table using parquet files on both file system and Amazon S3.
@@ -568,6 +677,8 @@ SELECT * FROM example_schemaless;
   - `key` columns only supports the following types: `int2`, `int4`, `int8`, `date`, `timestamp`, `float4`, `float8` and `text`.
   - `key` columns values must be unique, `parquet_s3_fdw` does not support checking for unique values for key columns, user must do that.
   - `key` columns only required for UPDATE/DELETE.
+
+- Does not support compression level setting for the compression type 'zstd'. The default compression level (3) is supported.
 
 ## Contributing
 Opening issues and pull requests on GitHub are welcome.

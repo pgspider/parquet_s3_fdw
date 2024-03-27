@@ -2502,6 +2502,7 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO tmp_schema OPTIONS (s
  tmp_schema | ft1_table     | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/ft1_table.parquet', sorted 'c1')     | 
  tmp_schema | ft1_text      | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/ft1_text.parquet', sorted 'c1')      | 
  tmp_schema | ft1_timestamp | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/ft1_timestamp.parquet', sorted 'c1') | 
+ tmp_schema | ftcomp        | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/ftcomp.parquet', sorted 'c1')        | 
  tmp_schema | tmp1_table    | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/tmp1_table.parquet', sorted 'c1')    | 
  tmp_schema | tmp2_table    | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/tmp2_table.parquet', sorted 'c1')    | 
  tmp_schema | tmp3_table    | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/tmp3_table.parquet', sorted 'c1')    | 
@@ -2510,170 +2511,179 @@ IMPORT FOREIGN SCHEMA :var FROM SERVER parquet_s3_srv INTO tmp_schema OPTIONS (s
  tmp_schema | tmp_table     | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/tmp_table.parquet', sorted 'c1')     | 
  tmp_schema | tmp_test      | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/tmp_test.parquet', sorted 'c1')      | 
  tmp_schema | update_test   | parquet_s3_srv | (filename 's3://data/test-modify/parquet_modify/update_test.parquet', sorted 'c1')   | 
-(18 rows)
+(19 rows)
 
 --Testcase 468:
 \d tmp_schema.*
-              Foreign table "tmp_schema.delete_test"
- Column |  Type   | Collation | Nullable | Default | FDW options  
---------+---------+-----------+----------+---------+--------------
- id     | integer |           |          |         | (key 'true')
- a      | integer |           |          |         | 
- b      | text    |           |          |         | 
+                       Foreign table "tmp_schema.delete_test"
+ Column |  Type   | Collation | Nullable | Default |          FDW options           
+--------+---------+-----------+----------+---------+--------------------------------
+ id     | integer |           |          |         | (column_name 'id', key 'true')
+ a      | integer |           |          |         | (column_name 'a')
+ b      | text    |           |          |         | (column_name 'b')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/delete_test.parquet', sorted 'c1')
 
-                    Foreign table "tmp_schema.ft1_date"
- Column |       Type       | Collation | Nullable | Default | FDW options  
---------+------------------+-----------+----------+---------+--------------
- c1     | date             |           |          |         | (key 'true')
- c2     | text             |           |          |         | (key 'true')
- c3     | double precision |           |          |         | 
+                             Foreign table "tmp_schema.ft1_date"
+ Column |       Type       | Collation | Nullable | Default |          FDW options           
+--------+------------------+-----------+----------+---------+--------------------------------
+ c1     | date             |           |          |         | (column_name 'c1', key 'true')
+ c2     | text             |           |          |         | (column_name 'c2', key 'true')
+ c3     | double precision |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/ft1_date.parquet', sorted 'c1')
 
-              Foreign table "tmp_schema.ft1_float4"
- Column |  Type   | Collation | Nullable | Default | FDW options  
---------+---------+-----------+----------+---------+--------------
- c1     | real    |           |          |         | (key 'true')
- c2     | text    |           |          |         | (key 'true')
- c3     | boolean |           |          |         | 
+                       Foreign table "tmp_schema.ft1_float4"
+ Column |  Type   | Collation | Nullable | Default |          FDW options           
+--------+---------+-----------+----------+---------+--------------------------------
+ c1     | real    |           |          |         | (column_name 'c1', key 'true')
+ c2     | text    |           |          |         | (column_name 'c2', key 'true')
+ c3     | boolean |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/ft1_float4.parquet', sorted 'c1')
 
-                   Foreign table "tmp_schema.ft1_float8"
- Column |       Type       | Collation | Nullable | Default | FDW options  
---------+------------------+-----------+----------+---------+--------------
- c1     | double precision |           |          |         | (key 'true')
- c2     | text             |           |          |         | (key 'true')
- c3     | boolean          |           |          |         | 
+                            Foreign table "tmp_schema.ft1_float8"
+ Column |       Type       | Collation | Nullable | Default |          FDW options           
+--------+------------------+-----------+----------+---------+--------------------------------
+ c1     | double precision |           |          |         | (column_name 'c1', key 'true')
+ c2     | text             |           |          |         | (column_name 'c2', key 'true')
+ c3     | boolean          |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/ft1_float8.parquet', sorted 'c1')
 
-                Foreign table "tmp_schema.ft1_int2"
- Column |   Type   | Collation | Nullable | Default | FDW options  
---------+----------+-----------+----------+---------+--------------
- c1     | smallint |           |          |         | (key 'true')
- c2     | text     |           |          |         | (key 'true')
- c3     | boolean  |           |          |         | 
+                         Foreign table "tmp_schema.ft1_int2"
+ Column |   Type   | Collation | Nullable | Default |          FDW options           
+--------+----------+-----------+----------+---------+--------------------------------
+ c1     | smallint |           |          |         | (column_name 'c1', key 'true')
+ c2     | text     |           |          |         | (column_name 'c2', key 'true')
+ c3     | boolean  |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/ft1_int2.parquet', sorted 'c1')
 
-               Foreign table "tmp_schema.ft1_int4"
- Column |  Type   | Collation | Nullable | Default | FDW options  
---------+---------+-----------+----------+---------+--------------
- c1     | integer |           |          |         | (key 'true')
- c2     | text    |           |          |         | (key 'true')
- c3     | boolean |           |          |         | 
+                        Foreign table "tmp_schema.ft1_int4"
+ Column |  Type   | Collation | Nullable | Default |          FDW options           
+--------+---------+-----------+----------+---------+--------------------------------
+ c1     | integer |           |          |         | (column_name 'c1', key 'true')
+ c2     | text    |           |          |         | (column_name 'c2', key 'true')
+ c3     | boolean |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/ft1_int4.parquet', sorted 'c1')
 
-               Foreign table "tmp_schema.ft1_int8"
- Column |  Type   | Collation | Nullable | Default | FDW options  
---------+---------+-----------+----------+---------+--------------
- c1     | bigint  |           |          |         | (key 'true')
- c2     | text    |           |          |         | (key 'true')
- c3     | boolean |           |          |         | 
+                        Foreign table "tmp_schema.ft1_int8"
+ Column |  Type   | Collation | Nullable | Default |          FDW options           
+--------+---------+-----------+----------+---------+--------------------------------
+ c1     | bigint  |           |          |         | (column_name 'c1', key 'true')
+ c2     | text    |           |          |         | (column_name 'c2', key 'true')
+ c3     | boolean |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/ft1_int8.parquet', sorted 'c1')
 
-                         Foreign table "tmp_schema.ft1_table"
- Column |            Type             | Collation | Nullable | Default | FDW options  
---------+-----------------------------+-----------+----------+---------+--------------
- c1     | integer                     |           |          |         | (key 'true')
- c2     | text                        |           |          |         | (key 'true')
- c3     | timestamp without time zone |           |          |         | 
+                                  Foreign table "tmp_schema.ft1_table"
+ Column |            Type             | Collation | Nullable | Default |          FDW options           
+--------+-----------------------------+-----------+----------+---------+--------------------------------
+ c1     | integer                     |           |          |         | (column_name 'c1', key 'true')
+ c2     | text                        |           |          |         | (column_name 'c2', key 'true')
+ c3     | timestamp without time zone |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/ft1_table.parquet', sorted 'c1')
 
-                    Foreign table "tmp_schema.ft1_text"
- Column |       Type       | Collation | Nullable | Default | FDW options  
---------+------------------+-----------+----------+---------+--------------
- c1     | text             |           |          |         | (key 'true')
- c2     | text             |           |          |         | (key 'true')
- c3     | double precision |           |          |         | 
+                             Foreign table "tmp_schema.ft1_text"
+ Column |       Type       | Collation | Nullable | Default |          FDW options           
+--------+------------------+-----------+----------+---------+--------------------------------
+ c1     | text             |           |          |         | (column_name 'c1', key 'true')
+ c2     | text             |           |          |         | (column_name 'c2', key 'true')
+ c3     | double precision |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/ft1_text.parquet', sorted 'c1')
 
-                       Foreign table "tmp_schema.ft1_timestamp"
- Column |            Type             | Collation | Nullable | Default | FDW options  
---------+-----------------------------+-----------+----------+---------+--------------
- c1     | timestamp without time zone |           |          |         | (key 'true')
- c2     | text                        |           |          |         | (key 'true')
- c3     | double precision            |           |          |         | 
+                                Foreign table "tmp_schema.ft1_timestamp"
+ Column |            Type             | Collation | Nullable | Default |          FDW options           
+--------+-----------------------------+-----------+----------+---------+--------------------------------
+ c1     | timestamp without time zone |           |          |         | (column_name 'c1', key 'true')
+ c2     | text                        |           |          |         | (column_name 'c2', key 'true')
+ c3     | double precision            |           |          |         | (column_name 'c3')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/ft1_timestamp.parquet', sorted 'c1')
 
-                   Foreign table "tmp_schema.tmp1_table"
- Column |       Type       | Collation | Nullable | Default | FDW options  
---------+------------------+-----------+----------+---------+--------------
- id     | double precision |           |          |         | (key 'true')
- a      | text             |           |          |         | 
+                         Foreign table "tmp_schema.ftcomp"
+ Column |  Type  | Collation | Nullable | Default |          FDW options           
+--------+--------+-----------+----------+---------+--------------------------------
+ c1     | bigint |           |          |         | (column_name 'c1', key 'true')
+ c2     | bigint |           |          |         | (column_name 'c2', key 'true')
+ c3     | text   |           |          |         | (column_name 'c3')
+Server: parquet_s3_srv
+FDW options: (filename 's3://data/test-modify/parquet_modify/ftcomp.parquet', sorted 'c1')
+
+                            Foreign table "tmp_schema.tmp1_table"
+ Column |       Type       | Collation | Nullable | Default |          FDW options           
+--------+------------------+-----------+----------+---------+--------------------------------
+ id     | double precision |           |          |         | (column_name 'id', key 'true')
+ a      | text             |           |          |         | (column_name 'a')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/tmp1_table.parquet', sorted 'c1')
 
-             Foreign table "tmp_schema.tmp2_table"
- Column | Type  | Collation | Nullable | Default | FDW options  
---------+-------+-----------+----------+---------+--------------
- id     | jsonb |           |          |         | (key 'true')
- a      | text  |           |          |         | 
+                      Foreign table "tmp_schema.tmp2_table"
+ Column | Type  | Collation | Nullable | Default |          FDW options           
+--------+-------+-----------+----------+---------+--------------------------------
+ id     | jsonb |           |          |         | (column_name 'id', key 'true')
+ a      | text  |           |          |         | (column_name 'a')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/tmp2_table.parquet', sorted 'c1')
 
-               Foreign table "tmp_schema.tmp3_table"
- Column |   Type   | Collation | Nullable | Default | FDW options  
---------+----------+-----------+----------+---------+--------------
- id     | bigint[] |           |          |         | (key 'true')
- a      | text     |           |          |         | 
+                        Foreign table "tmp_schema.tmp3_table"
+ Column |   Type   | Collation | Nullable | Default |          FDW options           
+--------+----------+-----------+----------+---------+--------------------------------
+ id     | bigint[] |           |          |         | (column_name 'id', key 'true')
+ a      | text     |           |          |         | (column_name 'a')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/tmp3_table.parquet', sorted 'c1')
 
-              Foreign table "tmp_schema.tmp4_table"
- Column |  Type   | Collation | Nullable | Default | FDW options  
---------+---------+-----------+----------+---------+--------------
- id     | boolean |           |          |         | (key 'true')
- a      | text    |           |          |         | 
+                       Foreign table "tmp_schema.tmp4_table"
+ Column |  Type   | Collation | Nullable | Default |          FDW options           
+--------+---------+-----------+----------+---------+--------------------------------
+ id     | boolean |           |          |         | (column_name 'id', key 'true')
+ a      | text    |           |          |         | (column_name 'a')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/tmp4_table.parquet', sorted 'c1')
 
-              Foreign table "tmp_schema.tmp5_table"
- Column |  Type  | Collation | Nullable | Default | FDW options  
---------+--------+-----------+----------+---------+--------------
- id     | text[] |           |          |         | (key 'true')
- a      | text   |           |          |         | 
+                       Foreign table "tmp_schema.tmp5_table"
+ Column |  Type  | Collation | Nullable | Default |          FDW options           
+--------+--------+-----------+----------+---------+--------------------------------
+ id     | text[] |           |          |         | (column_name 'id', key 'true')
+ a      | text   |           |          |         | (column_name 'a')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/tmp5_table.parquet', sorted 'c1')
 
-              Foreign table "tmp_schema.tmp_table"
- Column |  Type  | Collation | Nullable | Default | FDW options  
---------+--------+-----------+----------+---------+--------------
- id     | bigint |           |          |         | (key 'true')
- a      | text   |           |          |         | 
+                       Foreign table "tmp_schema.tmp_table"
+ Column |  Type  | Collation | Nullable | Default |          FDW options           
+--------+--------+-----------+----------+---------+--------------------------------
+ id     | bigint |           |          |         | (column_name 'id', key 'true')
+ a      | text   |           |          |         | (column_name 'a')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/tmp_table.parquet', sorted 'c1')
 
-               Foreign table "tmp_schema.tmp_test"
- Column |  Type   | Collation | Nullable | Default | FDW options  
---------+---------+-----------+----------+---------+--------------
- id     | integer |           |          |         | (key 'true')
- a      | integer |           |          |         | 
- b      | text    |           |          |         | 
+                        Foreign table "tmp_schema.tmp_test"
+ Column |  Type   | Collation | Nullable | Default |          FDW options           
+--------+---------+-----------+----------+---------+--------------------------------
+ id     | integer |           |          |         | (column_name 'id', key 'true')
+ a      | integer |           |          |         | (column_name 'a')
+ b      | text    |           |          |         | (column_name 'b')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/tmp_test.parquet', sorted 'c1')
 
-              Foreign table "tmp_schema.update_test"
- Column |  Type   | Collation | Nullable | Default | FDW options  
---------+---------+-----------+----------+---------+--------------
- id     | integer |           |          |         | (key 'true')
- a      | integer |           |          |         | 
- b      | integer |           |          |         | 
- c      | text    |           |          |         | 
+                       Foreign table "tmp_schema.update_test"
+ Column |  Type   | Collation | Nullable | Default |          FDW options           
+--------+---------+-----------+----------+---------+--------------------------------
+ id     | integer |           |          |         | (column_name 'id', key 'true')
+ a      | integer |           |          |         | (column_name 'a')
+ b      | integer |           |          |         | (column_name 'b')
+ c      | text    |           |          |         | (column_name 'c')
 Server: parquet_s3_srv
 FDW options: (filename 's3://data/test-modify/parquet_modify/update_test.parquet', sorted 'c1')
 
 --Testcase 469:
 DROP SCHEMA tmp_schema CASCADE;
-psql:sql/13.12/parquet_s3_fdw_modify.sql:1499: NOTICE:  drop cascades to 18 other objects
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1499: NOTICE:  drop cascades to 19 other objects
 DETAIL:  drop cascades to foreign table tmp_schema.delete_test
 drop cascades to foreign table tmp_schema.ft1_date
 drop cascades to foreign table tmp_schema.ft1_float4
@@ -2684,6 +2694,7 @@ drop cascades to foreign table tmp_schema.ft1_int8
 drop cascades to foreign table tmp_schema.ft1_table
 drop cascades to foreign table tmp_schema.ft1_text
 drop cascades to foreign table tmp_schema.ft1_timestamp
+drop cascades to foreign table tmp_schema.ftcomp
 drop cascades to foreign table tmp_schema.tmp1_table
 drop cascades to foreign table tmp_schema.tmp2_table
 drop cascades to foreign table tmp_schema.tmp3_table
@@ -2692,6 +2703,512 @@ drop cascades to foreign table tmp_schema.tmp5_table
 drop cascades to foreign table tmp_schema.tmp_table
 drop cascades to foreign table tmp_schema.tmp_test
 drop cascades to foreign table tmp_schema.update_test
+-- ===================================================================
+-- test compression
+-- Option a: compress with snappy
+-- Option b: compress with zstd
+-- Option c: no compression (uncompressed)
+-- Option d: retain original format
+-- ===================================================================
+\set var :PATH_FILENAME'/data/test-modify/parquet_modify/ftcomp.parquet'
+--Testcase 75:
+CREATE FOREIGN TABLE ftcomp (
+    c1 int,
+    c2 int OPTIONS (key 'true'),
+    c3 text
+) SERVER parquet_s3_srv
+OPTIONS (filename :'var');
+-- show information about compression through debug2
+SET client_min_messages=debug2;
+-- insert/update/delete data on the table, the current compression will be retained
+--Testcase 473:
+INSERT INTO ftcomp VALUES (1000, 1000, 'retain compression');
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1522: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1522: DEBUG:  parquet_s3_fdw: retain compression type SNAPPY at column c1
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1522: DEBUG:  parquet_s3_fdw: retain compression type SNAPPY at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1522: DEBUG:  parquet_s3_fdw: retain compression type SNAPPY at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1522: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 474:
+UPDATE ftcomp SET c3 = 'compression retained' WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1524: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1524: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1524: DEBUG:  parquet_s3_fdw: retain compression type SNAPPY at column c1
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1524: DEBUG:  parquet_s3_fdw: retain compression type SNAPPY at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1524: DEBUG:  parquet_s3_fdw: retain compression type SNAPPY at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1524: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 504:
+SELECT * FROM ftcomp;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1526: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+  c1  |  c2  |          c3          
+------+------+----------------------
+    1 |    1 | foo
+    2 |    2 | bar
+    3 |    3 | baz
+ 1000 | 1000 | compression retained
+(4 rows)
+
+--Testcase 475:
+DELETE FROM ftcomp WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1528: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1528: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1528: DEBUG:  parquet_s3_fdw: retain compression type SNAPPY at column c1
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1528: DEBUG:  parquet_s3_fdw: retain compression type SNAPPY at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1528: DEBUG:  parquet_s3_fdw: retain compression type SNAPPY at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1528: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+-- set compression with ZSTD at table level, the compression will be applied to all column data
+ALTER FOREIGN TABLE ftcomp OPTIONS (ADD compression_type 'ZSTD');
+--Testcase 479:
+INSERT INTO ftcomp VALUES (1000, 1000, 'apply ZSTD');
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1533: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1533: DEBUG:  parquet_s3_fdw: set compression type 'ZSTD' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1533: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 480:
+UPDATE ftcomp SET c3 = 'ZSTD applied' WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1535: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1535: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1535: DEBUG:  parquet_s3_fdw: set compression type 'ZSTD' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1535: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 505:
+SELECT * FROM ftcomp;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1537: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+  c1  |  c2  |      c3      
+------+------+--------------
+    1 |    1 | foo
+    2 |    2 | bar
+    3 |    3 | baz
+ 1000 | 1000 | ZSTD applied
+(4 rows)
+
+--Testcase 481:
+DELETE FROM ftcomp WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1539: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1539: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1539: DEBUG:  parquet_s3_fdw: set compression type 'ZSTD' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1539: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+-- set compression with SNAPPY at table level, the compression will be applied to all column data
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'SNAPPY');
+--Testcase 476:
+INSERT INTO ftcomp VALUES (1000, 1000, 'apply SNAPPY');
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1544: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1544: DEBUG:  parquet_s3_fdw: set compression type 'SNAPPY' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1544: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 477:
+UPDATE ftcomp SET c3 = 'SNAPPY applied' WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1546: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1546: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1546: DEBUG:  parquet_s3_fdw: set compression type 'SNAPPY' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1546: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 506:
+SELECT * FROM ftcomp;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1548: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+  c1  |  c2  |       c3       
+------+------+----------------
+    1 |    1 | foo
+    2 |    2 | bar
+    3 |    3 | baz
+ 1000 | 1000 | SNAPPY applied
+(4 rows)
+
+--Testcase 478:
+DELETE FROM ftcomp WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1550: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1550: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1550: DEBUG:  parquet_s3_fdw: set compression type 'SNAPPY' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1550: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+-- set no compression (uncompressed) at table level, no compression will be applied to all column data
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'UNCOMPRESSED');
+--Testcase 482:
+INSERT INTO ftcomp VALUES (1000, 1000, 'UNCOMPRESSED');
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1555: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1555: DEBUG:  parquet_s3_fdw: set compression type 'UNCOMPRESSED' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1555: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 483:
+UPDATE ftcomp SET c3 = 'no compression' WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1557: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1557: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1557: DEBUG:  parquet_s3_fdw: set compression type 'UNCOMPRESSED' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1557: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 507:
+SELECT * FROM ftcomp;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1559: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+  c1  |  c2  |       c3       
+------+------+----------------
+    1 |    1 | foo
+    2 |    2 | bar
+    3 |    3 | baz
+ 1000 | 1000 | no compression
+(4 rows)
+
+--Testcase 484:
+DELETE FROM ftcomp WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1561: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1561: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1561: DEBUG:  parquet_s3_fdw: set compression type 'UNCOMPRESSED' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1561: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+-- not set compression at table level
+-- set compression 'SNAPPY' for column c2 and 'ZSTD' for column c3, column "c1" retains no compression
+ALTER FOREIGN TABLE ftcomp OPTIONS (DROP compression_type);
+ALTER FOREIGN TABLE ftcomp ALTER COLUMN c2 OPTIONS (add compression_type 'SNAPPY');
+ALTER FOREIGN TABLE ftcomp ALTER COLUMN c3 OPTIONS (add compression_type 'ZSTD');
+--Testcase 485:
+\dS+ ftcomp;
+                                                    Foreign table "public.ftcomp"
+ Column |  Type   | Collation | Nullable | Default |               FDW options               | Storage  | Stats target | Description 
+--------+---------+-----------+----------+---------+-----------------------------------------+----------+--------------+-------------
+ c1     | integer |           |          |         |                                         | plain    |              | 
+ c2     | integer |           |          |         | (key 'true', compression_type 'SNAPPY') | plain    |              | 
+ c3     | text    |           |          |         | (compression_type 'ZSTD')               | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename 's3://data/test-modify/parquet_modify/ftcomp.parquet')
+
+--Testcase 486:
+INSERT INTO ftcomp VALUES (1000, 1000, 'test mixed compression');
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1572: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1572: DEBUG:  parquet_s3_fdw: retain compression type UNCOMPRESSED at column c1
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1572: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1572: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1572: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 487:
+UPDATE ftcomp SET c3 = 'mixed compression' WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1574: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1574: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1574: DEBUG:  parquet_s3_fdw: retain compression type UNCOMPRESSED at column c1
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1574: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1574: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1574: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 508:
+SELECT * FROM ftcomp;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1576: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+  c1  |  c2  |        c3         
+------+------+-------------------
+    1 |    1 | foo
+    2 |    2 | bar
+    3 |    3 | baz
+ 1000 | 1000 | mixed compression
+(4 rows)
+
+--Testcase 488:
+DELETE FROM ftcomp WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1578: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1578: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1578: DEBUG:  parquet_s3_fdw: retain compression type UNCOMPRESSED at column c1
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1578: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1578: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1578: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+-- set compression 'SNAPPY' at table level
+-- compression 'SNAPPY' for column c2 and 'ZSTD' for column c3
+-- compression of column c1 will be 'SNAPPY' (applied through table level)
+ALTER FOREIGN TABLE ftcomp OPTIONS (ADD compression_type 'SNAPPY');
+--Testcase 489:
+\dS+ ftcomp;
+                                                    Foreign table "public.ftcomp"
+ Column |  Type   | Collation | Nullable | Default |               FDW options               | Storage  | Stats target | Description 
+--------+---------+-----------+----------+---------+-----------------------------------------+----------+--------------+-------------
+ c1     | integer |           |          |         |                                         | plain    |              | 
+ c2     | integer |           |          |         | (key 'true', compression_type 'SNAPPY') | plain    |              | 
+ c3     | text    |           |          |         | (compression_type 'ZSTD')               | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename 's3://data/test-modify/parquet_modify/ftcomp.parquet', compression_type 'SNAPPY')
+
+--Testcase 490:
+INSERT INTO ftcomp VALUES (1000, 1000, 'test mixed compression');
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1588: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1588: DEBUG:  parquet_s3_fdw: set compression type 'SNAPPY' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1588: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1588: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1588: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 491:
+UPDATE ftcomp SET c3 = 'mixed compression' WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1590: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1590: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1590: DEBUG:  parquet_s3_fdw: set compression type 'SNAPPY' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1590: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1590: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1590: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 509:
+SELECT * FROM ftcomp;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1592: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+  c1  |  c2  |        c3         
+------+------+-------------------
+    1 |    1 | foo
+    2 |    2 | bar
+    3 |    3 | baz
+ 1000 | 1000 | mixed compression
+(4 rows)
+
+--Testcase 492:
+DELETE FROM ftcomp WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1594: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1594: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1594: DEBUG:  parquet_s3_fdw: set compression type 'SNAPPY' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1594: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1594: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1594: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+-- set compression 'ZSTD' at table level
+-- compression 'SNAPPY' for column c2 and 'ZSTD' for column c3
+-- compression of column c1 will be 'ZSTD' (applied through table level)
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'ZSTD');
+--Testcase 493:
+\dS+ ftcomp;
+                                                    Foreign table "public.ftcomp"
+ Column |  Type   | Collation | Nullable | Default |               FDW options               | Storage  | Stats target | Description 
+--------+---------+-----------+----------+---------+-----------------------------------------+----------+--------------+-------------
+ c1     | integer |           |          |         |                                         | plain    |              | 
+ c2     | integer |           |          |         | (key 'true', compression_type 'SNAPPY') | plain    |              | 
+ c3     | text    |           |          |         | (compression_type 'ZSTD')               | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename 's3://data/test-modify/parquet_modify/ftcomp.parquet', compression_type 'ZSTD')
+
+--Testcase 494:
+INSERT INTO ftcomp VALUES (1000, 1000, 'test mixed compression');
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1604: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1604: DEBUG:  parquet_s3_fdw: set compression type 'ZSTD' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1604: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1604: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1604: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 495:
+UPDATE ftcomp SET c3 = 'mixed compression' WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1606: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1606: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1606: DEBUG:  parquet_s3_fdw: set compression type 'ZSTD' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1606: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1606: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1606: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 510:
+SELECT * FROM ftcomp;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1608: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+  c1  |  c2  |        c3         
+------+------+-------------------
+    1 |    1 | foo
+    2 |    2 | bar
+    3 |    3 | baz
+ 1000 | 1000 | mixed compression
+(4 rows)
+
+--Testcase 496:
+DELETE FROM ftcomp WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1610: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1610: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1610: DEBUG:  parquet_s3_fdw: set compression type 'ZSTD' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1610: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1610: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1610: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+-- set no compression 'UNCOMPRESSED' at table level
+-- compression 'SNAPPY' for column c2 and 'ZSTD' for column c3
+-- compression of column c1 will be 'UNCOMPRESSED' (applied through table level)
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'UNCOMPRESSED');
+--Testcase 497:
+\dS+ ftcomp;
+                                                    Foreign table "public.ftcomp"
+ Column |  Type   | Collation | Nullable | Default |               FDW options               | Storage  | Stats target | Description 
+--------+---------+-----------+----------+---------+-----------------------------------------+----------+--------------+-------------
+ c1     | integer |           |          |         |                                         | plain    |              | 
+ c2     | integer |           |          |         | (key 'true', compression_type 'SNAPPY') | plain    |              | 
+ c3     | text    |           |          |         | (compression_type 'ZSTD')               | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename 's3://data/test-modify/parquet_modify/ftcomp.parquet', compression_type 'UNCOMPRESSED')
+
+--Testcase 498:
+INSERT INTO ftcomp VALUES (1000, 1000, 'test mixed compression');
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1620: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1620: DEBUG:  parquet_s3_fdw: set compression type 'UNCOMPRESSED' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1620: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1620: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1620: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 499:
+UPDATE ftcomp SET c3 = 'mixed compression' WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1622: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1622: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1622: DEBUG:  parquet_s3_fdw: set compression type 'UNCOMPRESSED' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1622: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1622: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1622: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+--Testcase 511:
+SELECT * FROM ftcomp;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1624: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+  c1  |  c2  |        c3         
+------+------+-------------------
+    1 |    1 | foo
+    2 |    2 | bar
+    3 |    3 | baz
+ 1000 | 1000 | mixed compression
+(4 rows)
+
+--Testcase 500:
+DELETE FROM ftcomp WHERE c2 = 1000;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1626: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1626: DEBUG:  parquet_s3_fdw: open Parquet file on S3. datatest-modify/parquet_modify/ftcomp.parquet
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1626: DEBUG:  parquet_s3_fdw: set compression type 'UNCOMPRESSED' at table level
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1626: DEBUG:  parquet_s3_fdw: set new compression type 'SNAPPY' at column c2
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1626: DEBUG:  parquet_s3_fdw: set new compression type 'ZSTD' at column c3
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1626: DEBUG:  parquet_s3_fdw: added object 'test-modify/parquet_modify/ftcomp.parquet' to bucket 'data'.
+-- validate options
+--Testcase 501:
+ALTER FOREIGN TABLE ftcomp OPTIONS (SET compression_type 'unknown'); -- error
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1630: ERROR:  parquet_s3_fdw: compression type 'unknown' is not supported
+--Testcase 502:
+ALTER FOREIGN TABLE ftcomp ALTER COLUMN c1 OPTIONS (ADD compression_type 'unknown'); -- error
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1632: ERROR:  parquet_s3_fdw: compression type 'unknown' is not supported
+--Testcase 503:
+DROP FOREIGN TABLE ftcomp;
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1635: DEBUG:  drop auto-cascades to type ftcomp
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1635: DEBUG:  drop auto-cascades to type ftcomp[]
+SET client_min_messages=info;
+-- Test modification with case-sensitive column name
+-- ===================================================================
+\set var :PATH_FILENAME'/data/test-modify/parquet_modify_case_sensitivity/case-sensitive.parquet'
+--Testcase 512:
+CREATE FOREIGN TABLE case_sensitive (
+    id INT OPTIONS (key 'true'),
+    "UPPER" text,
+    lower text,
+    "MiXiNg" text
+) SERVER parquet_s3_srv OPTIONS (filename :'var');
+--Testcase 513:
+\dS+ case_sensitive;
+                                  Foreign table "public.case_sensitive"
+ Column |  Type   | Collation | Nullable | Default | FDW options  | Storage  | Stats target | Description 
+--------+---------+-----------+----------+---------+--------------+----------+--------------+-------------
+ id     | integer |           |          |         | (key 'true') | plain    |              | 
+ UPPER  | text    |           |          |         |              | extended |              | 
+ lower  | text    |           |          |         |              | extended |              | 
+ MiXiNg | text    |           |          |         |              | extended |              | 
+Server: parquet_s3_srv
+FDW options: (filename 's3://data/test-modify/parquet_modify_case_sensitivity/case-sensitive.parquet')
+
+-- Select all data from table, expect correct data for all columns.
+--Testcase 514:
+SELECT * FROM case_sensitive;
+ id | UPPER | lower | MiXiNg 
+----+-------+-------+--------
+  1 | UPPER | lower | MixinG
+  2 | CASE  | case  | CaSe
+  3 | DATA  | data  | dAtA
+(3 rows)
+
+-- Modification with correct name, expect success
+--Testcase 515:
+INSERT INTO case_sensitive (id, "UPPER", lower, "MiXiNg") VALUES (4, 'INSERTED', 'inserted', 'InSeRtEd');
+--Testcase 516:
+SELECT * FROM case_sensitive;
+ id |  UPPER   |  lower   |  MiXiNg  
+----+----------+----------+----------
+  1 | UPPER    | lower    | MixinG
+  2 | CASE     | case     | CaSe
+  3 | DATA     | data     | dAtA
+  4 | INSERTED | inserted | InSeRtEd
+(4 rows)
+
+--Testcase 517:
+UPDATE case_sensitive SET "UPPER" = 'UPDATED', lower = 'updated', "MiXiNg" = 'UpDaTeD' WHERE "UPPER" = 'INSERTED' AND lower = 'inserted' AND "MiXiNg" = 'InSeRtEd';
+--Testcase 518:
+SELECT * FROM case_sensitive;
+ id |  UPPER  |  lower  | MiXiNg  
+----+---------+---------+---------
+  1 | UPPER   | lower   | MixinG
+  2 | CASE    | case    | CaSe
+  3 | DATA    | data    | dAtA
+  4 | UPDATED | updated | UpDaTeD
+(4 rows)
+
+--Testcase 519:
+DELETE FROM case_sensitive WHERE "UPPER" = 'UPDATED' AND lower = 'updated' AND "MiXiNg" = 'UpDaTeD';
+--Testcase 520:
+SELECT * FROM case_sensitive;
+ id | UPPER | lower | MiXiNg 
+----+-------+-------+--------
+  1 | UPPER | lower | MixinG
+  2 | CASE  | case  | CaSe
+  3 | DATA  | data  | dAtA
+(3 rows)
+
+-- Try to modify with a different case column name
+--Testcase 521:
+ALTER FOREIGN TABLE case_sensitive RENAME "UPPER" TO upper;
+--Testcase 522:
+ALTER FOREIGN TABLE case_sensitive RENAME lower TO "LOWER";
+--Testcase 523:
+ALTER FOREIGN TABLE case_sensitive RENAME "MiXiNg" TO "mIxInG";
+-- Cannot map foreign table columns and parquet columns so no suitable target file to insert.
+--Testcase 524:
+INSERT INTO case_sensitive (id, upper, "LOWER", "mIxInG") VALUES (4, 'INSERTED', 'inserted', 'InSeRtEd');
+psql:sql/13.12/parquet_s3_fdw_modify.sql:1676: ERROR:  parquet_s3_fdw: can not find modify target file
+--Testcase 525:
+SELECT * FROM case_sensitive;
+ id | upper | LOWER | mIxInG 
+----+-------+-------+--------
+  1 |       |       | 
+  2 |       |       | 
+  3 |       |       | 
+(3 rows)
+
+-- Cannot map foreign table columns and parquet columns, so no corresponding row are updated.
+--Testcase 526:
+UPDATE case_sensitive SET upper = 'UPDATED', "LOWER" = 'updated', "mIxInG" = 'UpDaTeD' WHERE upper = 'DATA' AND "LOWER" = 'data' AND "mIxInG" = 'dAtA';
+--Testcase 527:
+SELECT * FROM case_sensitive;
+ id | upper | LOWER | mIxInG 
+----+-------+-------+--------
+  1 |       |       | 
+  2 |       |       | 
+  3 |       |       | 
+(3 rows)
+
+-- Cannot map foreign table columns and parquet columns, so no corresponding row are deleted.
+--Testcase 528:
+DELETE FROM case_sensitive WHERE upper = 'DATA' AND "LOWER" = 'data' AND "mIxInG" = 'dAtA';
+--Testcase 529:
+SELECT * FROM case_sensitive;
+ id | upper | LOWER | mIxInG 
+----+-------+-------+--------
+  1 |       |       | 
+  2 |       |       | 
+  3 |       |       | 
+(3 rows)
+
+-- Use column name mapping to map column and try again, expect success
+--Testcase 530:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (ADD column_name 'UPPER'),
+                                   ALTER COLUMN "LOWER" OPTIONS (ADD column_name 'lower'),
+                                   ALTER COLUMN "mIxInG" OPTIONS (ADD column_name 'MiXiNg');
+--Testcase 531:
+INSERT INTO case_sensitive (id, upper, "LOWER", "mIxInG") VALUES (4, 'INSERTED', 'inserted', 'InSeRtEd');
+--Testcase 532:
+SELECT * FROM case_sensitive;
+ id |  upper   |  LOWER   |  mIxInG  
+----+----------+----------+----------
+  1 | UPPER    | lower    | MixinG
+  2 | CASE     | case     | CaSe
+  3 | DATA     | data     | dAtA
+  4 | INSERTED | inserted | InSeRtEd
+(4 rows)
+
+--Testcase 533:
+UPDATE case_sensitive SET upper = 'UPDATED', "LOWER" = 'updated', "mIxInG" = 'UpDaTeD' WHERE upper = 'INSERTED' AND "LOWER" = 'inserted' AND "mIxInG" = 'InSeRtEd';
+--Testcase 534:
+SELECT * FROM case_sensitive;
+ id |  upper  |  LOWER  | mIxInG  
+----+---------+---------+---------
+  1 | UPPER   | lower   | MixinG
+  2 | CASE    | case    | CaSe
+  3 | DATA    | data    | dAtA
+  4 | UPDATED | updated | UpDaTeD
+(4 rows)
+
+--Testcase 535:
+DELETE FROM case_sensitive WHERE upper = 'UPDATED' AND "LOWER" = 'updated' AND "mIxInG" = 'UpDaTeD';
+--Testcase 536:
+SELECT * FROM case_sensitive;
+ id | upper | LOWER | mIxInG 
+----+-------+-------+--------
+  1 | UPPER | lower | MixinG
+  2 | CASE  | case  | CaSe
+  3 | DATA  | data  | dAtA
+(3 rows)
+
+-- clean up
+--Testcase 537:
+DROP FOREIGN TABLE case_sensitive;
 --CLEAN
 --Testcase 470:
 DROP USER MAPPING FOR CURRENT_USER SERVER parquet_s3_srv;

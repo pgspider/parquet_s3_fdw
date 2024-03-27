@@ -36,6 +36,7 @@ extern "C"
 #include "utils/date.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/rel.h"
 #include "utils/timestamp.h"
 
 #if PG_VERSION_NUM < 110000
@@ -200,19 +201,17 @@ void ParquetReader::schemaless_create_column_mapping(parquet::arrow::SchemaManif
     {
         auto field_name = schema_field.field->name();
         auto arrow_type = schema_field.field->type();
-        char arrow_colname[NAMEDATALEN];
         size_t sorted_col_idx;
         bool is_target_col;
 
         if (field_name.length() > NAMEDATALEN - 1)
             throw Error("parquet column name '%s' is too long (max: %d)",
                         field_name.c_str(), NAMEDATALEN - 1);
-        tolowercase(field_name.c_str(), arrow_colname);
 
         /* Find sorted column in parquet file */
-        sorted_col_idx = std::distance(sorted_cols.begin(), sorted_cols.find(arrow_colname));
+        sorted_col_idx = std::distance(sorted_cols.begin(), sorted_cols.find(field_name));
         /* Column will be fetch if existed in slcol list or in select all column query */
-        is_target_col = is_select_all || (slcols.find(arrow_colname) != slcols.end());
+        is_target_col = is_select_all || (slcols.find(field_name) != slcols.end());
 
         /*
          * Create mapping for target column, and get information for sorted column.
@@ -221,10 +220,9 @@ void ParquetReader::schemaless_create_column_mapping(parquet::arrow::SchemaManif
         {
             TypeInfo        typinfo(arrow_type);
             bool            error(false);
-            std::string     col_name = std::move(arrow_colname);
 
             /* Found mapping! */
-            this->column_names.push_back(col_name);
+            this->column_names.push_back(field_name);
 
             switch (arrow_type->id())
             {
@@ -253,12 +251,12 @@ void ParquetReader::schemaless_create_column_mapping(parquet::arrow::SchemaManif
                     PG_END_TRY();
                     if (error)
                         throw Error("parquet_s3_fdw: failed to get type length (column '%s')",
-                                    col_name.c_str());
+                                    field_name.c_str());
 
                     if (!OidIsValid(elem_type))
                         throw Error("parquet_s3_fdw: cannot convert parquet "
                                     "column of type LIST to scalar type of "
-                                    " postgres column '%s'", col_name.c_str());
+                                    " postgres column '%s'", field_name.c_str());
 
                     auto     &child = schema_field.children[0];
                     typinfo.children.emplace_back(child.field->type(),
@@ -306,7 +304,7 @@ void ParquetReader::schemaless_create_column_mapping(parquet::arrow::SchemaManif
                     PG_END_TRY();
                     if (error)
                         throw Error("failed to initialize output function for "
-                                    "Map column '%s'", col_name.c_str());
+                                    "Map column '%s'", field_name.c_str());
                     this->indices.push_back(key.column_index);
                     this->indices.push_back(item.column_index);
                     break;
@@ -333,7 +331,7 @@ void ParquetReader::schemaless_create_column_mapping(parquet::arrow::SchemaManif
 
                 /* Init sorted col data */
                 sorted_col_data.is_available = true;
-                sorted_col_data.col_name = pstrdup(col_name.c_str());
+                sorted_col_data.col_name = pstrdup(field_name.c_str());
                 sorted_col_data.is_null = true;
 
                 memset(&sort_key, 0, sizeof(SortSupportData));
@@ -368,7 +366,7 @@ void ParquetReader::schemaless_create_column_mapping(parquet::arrow::SchemaManif
  * create_column_mapping
  *      Create mapping between tuple descriptor and parquet columns.
  */
-void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<int> &attrs_used)
+void ParquetReader::create_column_mapping(TupleDesc tupleDesc, Oid relid, const std::set<int> &attrs_used)
 {
     parquet::ArrowReaderProperties  props;
     std::shared_ptr<arrow::Schema>  a_schema;
@@ -390,8 +388,9 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
     for (int i = 0; i < tupleDesc->natts; i++)
     {
         AttrNumber  attnum = i + 1 - FirstLowInvalidHeapAttributeNumber;
-        char        pg_colname[NAMEDATALEN];
-        const char *attname = NameStr(TupleDescAttr(tupleDesc, i)->attname);
+        char       *pg_colname = NameStr(TupleDescAttr(tupleDesc, i)->attname);
+        List        *options = NIL;
+        ListCell    *lc;
 
         this->map[i] = -1;
 
@@ -399,18 +398,33 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
         if (!have_wholerow && attrs_used.find(attnum) == attrs_used.end())
             continue;
 
-        tolowercase(NameStr(TupleDescAttr(tupleDesc, i)->attname), pg_colname);
+        if (TupleDescAttr(tupleDesc, i)->attisdropped)
+            continue;
+
+        /* If column_name option is used, get column name from the defined option */
+        options = GetForeignColumnOptions(relid, i + 1);
+        foreach (lc, options)
+        {
+            DefElem *def = (DefElem *)lfirst(lc);
+
+            if (strcmp(def->defname, ATTRIBUTE_OPTION_COLUMN_NAME) == 0)
+            {
+                pg_colname = defGetString(def);
+                break;
+            }
+        }
 
         for (auto &schema_field : manifest.schema_fields)
         {
-            auto field_name = schema_field.field->name();
-            auto arrow_type = schema_field.field->type();
+            auto    field_name = schema_field.field->name();
+            auto    arrow_type = schema_field.field->type();
             char arrow_colname[NAMEDATALEN];
 
             if (field_name.length() > NAMEDATALEN)
                 throw Error("parquet column name '%s' is too long (max: %d, file: '%s')",
                             field_name.c_str(), NAMEDATALEN - 1, this->filename.c_str());
-            tolowercase(schema_field.field->name().c_str(), arrow_colname);
+
+            strcpy(arrow_colname, field_name.c_str());
 
             /*
              * Compare postgres attribute name to the column name in arrow
@@ -429,6 +443,7 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
                 this->map[i] = this->column_names.size() - 1;
 
                 typinfo.pg.oid = TupleDescAttr(tupleDesc, i)->atttypid;
+                typinfo.arrow.column_name = field_name;
                 switch (arrow_type->id())
                 {
                     case arrow::Type::LIST:
@@ -469,7 +484,7 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
                         elem.pg.len = elem_len;
                         elem.pg.byval = elem_byval;
                         elem.pg.align = elem_align;
-                        initialize_cast(elem, attname);
+                        initialize_cast(elem, pg_colname);
 
                         this->indices.push_back(child.column_index);
                         break;
@@ -511,17 +526,17 @@ void ParquetReader::create_column_mapping(TupleDesc tupleDesc, const std::set<in
                         PG_END_TRY();
                         if (error)
                             throw Error("failed to initialize output function for "
-                                        "Map column '%s'", attname);
+                                        "Map column '%s'", pg_colname);
 
                         this->indices.push_back(key.column_index);
                         this->indices.push_back(item.column_index);
 
                         /* JSONB might need cast (e.g. to TEXT) */
-                        initialize_cast(typinfo, attname);
+                        initialize_cast(typinfo, pg_colname);
                         break;
                     }
                     default:
-                        initialize_cast(typinfo, attname);
+                        initialize_cast(typinfo, pg_colname);
                         typinfo.index = schema_field.column_index;
                         this->indices.push_back(schema_field.column_index);
                 }
@@ -1233,7 +1248,25 @@ public:
 
         for (uint64_t i = 0; i < types.size(); ++i)
         {
-            const auto &column = this->table->column(i);
+            std::shared_ptr<arrow::ChunkedArray> column = nullptr;
+
+            /*
+             * By using column name remapping feature, multiple columns of foreign table
+             * may refer to 1 column of parquet file. It causes the mismatch between
+             * number of column indices and actual number of table that ReadTable function
+             * returns.
+             * Example:
+             * 2 columns a and b of foreign table refers to the same column col of
+             * parquet file. types and indices variables have 2 elements, but this->table
+             * only returns 1 column.
+             * For that case, we use the column name to find corresponding column.
+             * For schemaless, it does not support column name remapping, so it is safe to map
+             * by index.
+             */
+            if (this->schemaless == false)
+                column = this->table->GetColumnByName(types[i].arrow.column_name);
+            else
+                column = this->table->column(i);
 
             int64 len = column->chunk(0)->length();
             this->chunk_info.emplace_back(len);
@@ -1661,11 +1694,29 @@ public:
                      int col,
                      bool has_nulls)
     {
-        std::shared_ptr<arrow::ChunkedArray> column = table->column(col);
+        std::shared_ptr<arrow::ChunkedArray> column = nullptr;
         TypeInfo &typinfo = this->types[col];
         void   *data;
         size_t  sz;
         int     row = 0;
+
+        /*
+         * By using column name remapping feature, multiple columns of foreign table
+         * may refer to 1 column of parquet file. It causes the mismatch between
+         * number of column indices and actual number of columns that ReadTable function
+         * returns.
+         * Example:
+         * 2 columns a and b of foreign table refers to the same column col of
+         * parquet file. types and indices variables have 2 elements, but this->table
+         * only returns 1 column.
+         * For that case, we use the column name to find corresponding column.
+         * For schemaless, it does not support column name remapping, so it is safe to map
+         * by index.
+         */
+        if (this->schemaless == false)
+            column = table->GetColumnByName(typinfo.arrow.column_name);
+        else
+            column = table->column(col);
 
         switch(typinfo.arrow.type_id) {
             case arrow::Type::BOOL:

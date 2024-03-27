@@ -76,6 +76,28 @@ execute prep('2018-01-03');
 --Testcase 28:
 execute prep('2018-01-01');
 
+-- does not support filtering in string column (no row group skipped)
+--Testcase 143:
+SELECT * FROM example1 WHERE (v->>'three')::text = 'foo';
+--Testcase 144:
+SELECT * FROM example1 WHERE (v->>'three')::text > 'TRES';
+--Testcase 145:
+SELECT * FROM example1 WHERE (v->>'three')::text >= 'TRES';
+--Testcase 146:
+SELECT * FROM example1 WHERE (v->>'three')::text < 'BAZ';
+--Testcase 147:
+SELECT * FROM example1 WHERE (v->>'three')::text <= 'BAZ';
+--Testcase 148:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" = 'foo';
+--Testcase 149:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" > 'TRES';
+--Testcase 150:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" >= 'TRES';
+--Testcase 151:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" < 'BAZ';
+--Testcase 152:
+SELECT * FROM example1 WHERE (v->>'three')::text COLLATE "C" <= 'BAZ';
+
 -- invalid options
 SET client_min_messages = WARNING;
 --Testcase 29:
@@ -237,6 +259,124 @@ SELECT * FROM example3 WHERE (v->>'three')::int4 = 3;
 ANALYZE example_sorted;
 
 SET client_min_messages = WARNING;
+
+--Testcase 237:
+RESET parallel_setup_cost;
+--Testcase 238:
+RESET parallel_tuple_cost;
+-- ===================================================================
+-- test case-sensitive column name
+-- ===================================================================
+\set var :PATH_FILENAME'/data/column_name/case-sensitive.parquet'
+--Testcase 239:
+CREATE FOREIGN TABLE case_sensitive (
+    "UPPER" text,
+    lower text,
+    "MiXiNg" text
+) SERVER parquet_s3_srv
+OPTIONS (filename :'var');
+
+--Testcase 240:
+\dS+ case_sensitive;
+-- Select all data from table, expect correct data for all columns.
+--Testcase 241:
+SELECT * FROM case_sensitive;
+
+-- Add some new case-sensitive columns which does not exist in parquet file,
+-- expect NULL data for that column.
+--Testcase 242:
+ALTER FOREIGN TABLE case_sensitive ADD COLUMN upper text, ADD COLUMN "LOWER" text, ADD COLUMN "mIxInG" text;
+--Testcase 243:
+\dS+ case_sensitive;
+--Testcase 244:
+SELECT * FROM case_sensitive;
+
+-- Test column name mapping feature with case-sensitive columns.
+-- 2 columns "UPPER", "upper" of the foreign table map to column "UPPER" of parquet file.
+-- 2 columns "lower", "LOWER" of the foreign table map to column "LOWER" of parquet file.
+-- 2 columns "MiXiNg", "mIxInG" of the foreign table map to column "MiXiNg" of parquet file.
+--Testcase 245:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (ADD column_name 'UPPER');
+--Testcase 246:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "LOWER" OPTIONS (ADD column_name 'lower');
+--Testcase 247:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "mIxInG" OPTIONS (ADD column_name 'MiXiNg');
+--Testcase 248:
+\dS+ case_sensitive;
+--Testcase 249:
+SELECT * FROM case_sensitive;
+
+-- Test sorted option with case-sensitive columns
+--Testcase 250:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (DROP column_name);
+--Testcase 251:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "LOWER" OPTIONS (DROP column_name);
+--Testcase 252:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "mIxInG" OPTIONS (DROP column_name);
+-- Single sorting key
+--Testcase 253:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (ADD sorted '"UPPER"');
+--Testcase 254:
+\dS+ case_sensitive;
+--Testcase 255:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "UPPER";
+--Testcase 256:
+SELECT * FROM case_sensitive ORDER BY "UPPER";
+-- Try to ORDER BY non-sorted column
+--Testcase 257:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "MiXiNg";
+--Testcase 258:
+SELECT * FROM case_sensitive ORDER BY "MiXiNg";
+-- Multiple sorting key
+--Testcase 259:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted '"UPPER" lower "MiXiNg"');
+--Testcase 260:
+\dS+ case_sensitive;
+--Testcase 261:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "UPPER", lower, "MiXiNg";
+--Testcase 262:
+SELECT * FROM case_sensitive ORDER BY "UPPER", lower, "MiXiNg";
+
+-- Combine column name mapping feature with sorted options for case-sensitive columns
+--Testcase 263:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN upper OPTIONS (ADD column_name 'UPPER');
+--Testcase 264:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "LOWER" OPTIONS (ADD column_name 'lower');
+--Testcase 265:
+ALTER FOREIGN TABLE case_sensitive ALTER COLUMN "mIxInG" OPTIONS (ADD column_name 'MiXiNg');
+-- Single sorting key
+--Testcase 266:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted 'upper');
+--Testcase 267:
+\dS+ case_sensitive;
+--Testcase 268:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY upper;
+--Testcase 269:
+SELECT * FROM case_sensitive ORDER BY upper;
+-- Try to ORDER BY non-sorted column
+--Testcase 270:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY "mIxInG";
+--Testcase 271:
+SELECT * FROM case_sensitive ORDER BY "mIxInG";
+-- Multiple sorting key
+--Testcase 272:
+ALTER FOREIGN TABLE case_sensitive OPTIONS (SET sorted 'upper "LOWER" "mIxInG"');
+--Testcase 273:
+\dS+ case_sensitive;
+--Testcase 274:
+EXPLAIN VERBOSE
+SELECT * FROM case_sensitive ORDER BY upper, "LOWER", "mIxInG";
+--Testcase 275:
+SELECT * FROM case_sensitive ORDER BY upper, "LOWER", "mIxInG";
+
+-- Clean-up
+--Testcase 276:
+DROP FOREIGN TABLE case_sensitive;
 
 --get version
 --Testcase 69:

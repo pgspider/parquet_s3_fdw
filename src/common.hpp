@@ -75,7 +75,6 @@ void *exc_palloc(std::size_t size);
 Oid to_postgres_type(int arrow_type);
 arrow::Type::type postgres_to_arrow_type(Oid postgres_type);
 Datum bytes_to_postgres_type(const char *bytes, Size len, const arrow::DataType *arrow_type);
-char *tolowercase(const char *input, char *output);
 arrow::Type::type get_arrow_list_elem_type(arrow::DataType *type);
 void datum_to_jsonb(Datum value, Oid typoid, bool isnull, FmgrInfo *outfunc,
                     JsonbParseState *result, JsonbIteratorToken seq);
