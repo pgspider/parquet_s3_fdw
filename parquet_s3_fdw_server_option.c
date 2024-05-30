@@ -33,7 +33,8 @@ bool
 parquet_s3_is_valid_server_option(DefElem *def)
 {
 	if (strcmp(def->defname, SERVER_OPTION_USE_MINIO) == 0 ||
-		strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0)
+		strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0 ||
+		strcmp(def->defname, SERVER_OPTION_USE_CREDENTIAL_PROVIDER) == 0)
 	{
 		/* Check that bool value is valid */
 		bool		check_bool_valid;
@@ -71,6 +72,8 @@ parquet_s3_extract_options(List *options, parquet_s3_server_opt * opt)
 			opt->use_minio = defGetBoolean(def);
 		else if (strcmp(def->defname, SERVER_OPTION_KEEP_CONNECTIONS) == 0)
 			opt->keep_connections = defGetBoolean(def);
+		else if (strcmp(def->defname, SERVER_OPTION_USE_CREDENTIAL_PROVIDER) == 0)
+			opt->use_credential_provider = defGetBoolean(def);
 		else if (strcmp(def->defname, SERVER_OPTION_REGION) == 0)
 			opt->region = defGetString(def);
 		else if (strcmp(def->defname, SERVER_OPTION_ENDPOINT) == 0)
@@ -98,6 +101,7 @@ parquet_s3_get_options(Oid foreignoid)
 	opt->use_minio = false;
 	/* By default, all the connections to any foreign servers are kept open. */
 	opt->keep_connections = true;
+	opt->use_credential_provider = false;
 	opt->region = "ap-northeast-1";
 	opt->endpoint = "127.0.0.1:9000";
 
@@ -147,6 +151,7 @@ parquet_s3_get_server_options(Oid serverid)
 	opt->use_minio = false;
 	/* By default, all the connections to any foreign servers are kept open. */
 	opt->keep_connections = true;
+	opt->use_credential_provider = false;
 	opt->region = "ap-northeast-1";
 	opt->endpoint = "127.0.0.1:9000";
 
