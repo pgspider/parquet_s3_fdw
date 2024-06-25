@@ -15,13 +15,13 @@ Read-only Apache Parquet foreign data wrapper supporting S3 access for PostgreSQ
 * libuuid-devel
 * pulseaudio-libs-devel
 ### 2. Install dependent libraries
-* `libarrow` and `libparquet`: Confirmed version is 12.0.0 (required).  
+* `libarrow` and `libparquet`: Confirmed version is 12.0.0 (required).
 Please refer to [building guide](https://github.com/apache/arrow/blob/master/docs/source/developers/cpp/building.rst).
 
-* `AWS SDK for C++ (libaws-cpp-sdk-core libaws-cpp-sdk-s3)`: Confirmed version is 1.11.91 (required).  
+* `AWS SDK for C++ (libaws-cpp-sdk-core libaws-cpp-sdk-s3)`: Confirmed version is 1.11.91 (required).
 Please refer to [bulding guide](https://docs.aws.amazon.com/sdk-for-cpp/v1/developer-guide/setup-linux.html)
 
-Attention!  
+Attention!
 We reccomend to build `libarrow`, `libparquet` and `AWS SDK for C++` from the source code. We failed to link if using pre-compiled binaries because gcc version is different between arrow and AWS SDK.
 
 ### 3. Build and install parquet_s3_fdw
@@ -45,6 +45,12 @@ CREATE EXTENSION parquet_s3_fdw;
 ```sql
 CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw;
 ```
+If wanted to feed AWS Credentials through DefaultAWSCredentialProviderChain then
+enable `use_credential_provider` server option
+
+```sql
+CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw OPTIONS (use_credential_provider 'true');
+```
 If using [MinIO][3] instead of AWS S3, please use use_minio option for create server.
 ```sql
 CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw OPTIONS (use_minio 'true');
@@ -54,6 +60,12 @@ CREATE SERVER parquet_s3_srv FOREIGN DATA WRAPPER parquet_s3_fdw OPTIONS (use_mi
 You have to specify user name and password if accessing Amazon S3.
 ```sql
 CREATE USER MAPPING FOR public SERVER parquet_s3_srv OPTIONS (user 's3user', password 's3password');
+```
+
+If `use_credential_provider` is enabled, then no need to pass `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as *User* and *Password*.
+
+```sql
+CREATE USER MAPPING FOR public SERVER parquet_s3_srv OPTIONS (user '_', password '_');
 ```
 
 ### Create foreign table
@@ -218,7 +230,7 @@ SELECT import_parquet_s3_explicit(
       v jsonb
     ) OPTIONS (filename '/path/to/parquet_file', schemaless 'true');
     SELECT * FROM example_schemaless;
-    id |                                                                v                                                                
+    id |                                                                v
     ----+---------------------------------------------------------------------------------------------------------------------------------
         | {"one": 1, "six": "t", "two": [1, 2, 3], "five": "2018-01-01", "four": "2018-01-01 00:00:00", "seven": 0.5, "three": "foo"}
         | {"one": 2, "six": "f", "two": [null, 5, 6], "five": "2018-01-02", "four": "2018-01-02 00:00:00", "seven": null, "three": "bar"}
@@ -235,10 +247,10 @@ SELECT import_parquet_s3_explicit(
   ```sql
   -- non-schemaless mode
   SELECT * FROM example;
-   one |    two     | three |        four         |    five    | six | seven 
+   one |    two     | three |        four         |    five    | six | seven
   -----+------------+-------+---------------------+------------+-----+-------
      1 | {1,2,3}    | foo   | 2018-01-01 00:00:00 | 2018-01-01 | t   |   0.5
-     2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00 | 2018-01-02 | f   |      
+     2 | {NULL,5,6} | bar   | 2018-01-02 00:00:00 | 2018-01-02 | f   |
   (2 rows)
   -- schemaless mode
   SELECT * FROM example_schemaless;
@@ -249,12 +261,12 @@ SELECT import_parquet_s3_explicit(
   (2 rows)
   ```
 
-- Fetch values in jsonb expression:  
-  - Use `->>` jsonb arrow operator which return text type. User may cast type the jsonb expression to get corresponding data representation.  
-  - For example, `v->>'col'` expression of fetch value `col` will be column name `col` in parquet file and we call it `schemaless variable` or `slvar`.  
+- Fetch values in jsonb expression:
+  - Use `->>` jsonb arrow operator which return text type. User may cast type the jsonb expression to get corresponding data representation.
+  - For example, `v->>'col'` expression of fetch value `col` will be column name `col` in parquet file and we call it `schemaless variable` or `slvar`.
     ```sql
     SELECT v->>'two', sqrt((v->>'one')::int) FROM example_schemaless;
-      ?column?   |        sqrt        
+      ?column?   |        sqrt
     --------------+--------------------
     [1, 2, 3]    |                  1
     [null, 5, 6] | 1.4142135623730951
@@ -279,16 +291,16 @@ SELECT import_parquet_s3_explicit(
       SERVER parquet_s3_srv
       OPTIONS (filename '/path/to/example1.parquet /path/to/example2.parquet', sorted 'int64_col', schemaless 'true');
       EXPLAIN (COSTS OFF) SELECT * FROM example_sorted ORDER BY (v->>'int64_col')::int8;
-                QUERY PLAN           
+                QUERY PLAN
       --------------------------------
       Foreign Scan on example_sorted
         Reader: Multifile Merge
-        Row groups: 
+        Row groups:
           example1.parquet: 1, 2
           example2.parquet: 1
       (5 rows)
       ```
-  - Support for arrow Nested List and Map: these type will be treated as nested jsonb value which can access by `->` operator.  
+  - Support for arrow Nested List and Map: these type will be treated as nested jsonb value which can access by `->` operator.
   For example:
     ```sql
     SELECT * FROM example_schemaless;
@@ -299,10 +311,10 @@ SELECT import_parquet_s3_explicit(
     (2 rows)
 
     SELECT v->'array_col'->1, v->'jsonb_col'->'1' FROM example3;
-    ?column? | ?column? 
+    ?column? | ?column?
     ----------+----------
     20       | "foo"
-    22       | 
+    22       |
     (2 rows)
     ```
 
@@ -438,7 +450,7 @@ INSERT INTO example_insert VALUES (1, 'text1', true), (2, DEFAULT, false), ((sel
 INSERT 0 3
 
 SELECT * FROM example_insert;
- c1 |       c2        | c3 
+ c1 |       c2        | c3
 ----+-----------------+----
   1 | text1           | t
   2 |                 | f
@@ -453,7 +465,7 @@ CREATE FOREIGN TABLE example_insert_schemaless (
 INSERT INTO example_insert_schemaless VALUES ('{"c1": 1, "c2": "text1", "c3": true}'), ('{"c1": 2, "c2": null, "c3": false}'), ('{"c1": 3, "c2": "values are fun!", "c3": true}');
 
 SELECT * FROM example_insert_schemaless;
-                       v                       
+                       v
 -----------------------------------------------
  {"c1": 1, "c2": "text1", "c3": "t"}
  {"c1": 2, "c2": null, "c3": "f"}
@@ -486,7 +498,7 @@ CREATE FOREIGN TABLE example (
 ) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example.parquet');
 
 SELECT * FROM example;
- c1 |       c2        | c3 
+ c1 |       c2        | c3
 ----+-----------------+----
   1 | text1           | t
   2 |                 | f
@@ -497,7 +509,7 @@ UPDATE example SET c3 = false WHERE c2 = 'text1';
 UPDATE 1
 
 SELECT * FROM example;
- c1 |       c2        | c3 
+ c1 |       c2        | c3
 ----+-----------------+----
   1 | text1           | f
   2 |                 | f
@@ -508,7 +520,7 @@ DELETE FROM example WHERE c1 = 2;
 DELETE 1
 
 SELECT * FROM example;
- c1 |       c2        | c3 
+ c1 |       c2        | c3
 ----+-----------------+----
   1 | text1           | f
   3 | values are fun! | t
@@ -520,7 +532,7 @@ CREATE FOREIGN TABLE example_schemaless (
 ) SERVER parquet_s3_srv OPTIONS (filename 's3://data/example.parquet', schemaless 'true', key_columns 'c1');
 
 SELECT * FROM example_schemaless;
-                       v                       
+                       v
 -----------------------------------------------
  {"c1": 1, "c2": "text1", "c3": "t"}
  {"c1": 2, "c2": null, "c3": "f"}
@@ -531,7 +543,7 @@ UPDATE example_schemaless SET v='{"c3":false}' WHERE v->>'c2' = 'text1';
 UPDATE 1
 
 SELECT * FROM example_schemaless;
-                       v                       
+                       v
 -----------------------------------------------
  {"c1": 1, "c2": "text1", "c3": "f"}
  {"c1": 2, "c2": null, "c3": "f"}
@@ -542,7 +554,7 @@ DELETE FROM example_schemaless WHERE (v->>'c1')::int = 2;
 DELETE 1
 
 SELECT * FROM example_schemaless;
-                       v                       
+                       v
 -----------------------------------------------
  {"c1": 1, "c2": "text1", "c3": "f"}
  {"c1": 3, "c2": "values are fun!", "c3": "t"}
@@ -573,7 +585,7 @@ SELECT * FROM example_schemaless;
 Opening issues and pull requests on GitHub are welcome.
 
 ## License
-Copyright (c) 2021, TOSHIBA Corporation  
+Copyright (c) 2021, TOSHIBA Corporation
 Copyright (c) 2018 - 2019, adjust GmbH
 
 Permission to use, copy, modify, and distribute this software and its documentation for any purpose, without fee, and without a written agreement is hereby granted, provided that the above copyright notice and this paragraph and the following two paragraphs appear in all copies.
