@@ -989,7 +989,7 @@ extract_rowgroups_list(const char *filename,
         }  /* loop over rowgroups */
     }
     catch(const std::exception& e) {
-        error = e.what();      
+        error = e.what();
     }
     if (!error.empty()) {
         if (reader_entry)
@@ -2540,7 +2540,7 @@ parquetAcquireSampleRowsFunc(Relation relation, int /* elevel */,
         slcols.insert(std::string(strVal(rcol)));
     }
 
-    festate = create_parquet_execution_state(RT_MULTI, reader_cxt, 
+    festate = create_parquet_execution_state(RT_MULTI, reader_cxt,
                                              fdw_private.dirname,
                                              fdw_private.s3client,
                                              tupleDesc,
@@ -2753,7 +2753,7 @@ parquetIsForeignScanParallelSafe(PlannerInfo * /* root */,
                                  RelOptInfo *rel,
                                  RangeTblEntry * /* rte */)
 {
-    /* Plan nodes that reference a correlated SubPlan is always parallel restricted. 
+    /* Plan nodes that reference a correlated SubPlan is always parallel restricted.
      * Therefore, return false when there is lateral join.
      */
     if (rel->lateral_relids)
@@ -4329,6 +4329,7 @@ int ExecForeignDDL(Oid serverOid,
     table = GetForeignTable(RelationGetRelid(rel));
     user = GetUserMapping(GetUserId(), serverOid);
 
+    parquet_s3_server_opt *options = parquet_s3_get_options(serverOid);
     foreach(lc, server->options)
     {
         DefElem    *def = (DefElem *) lfirst(lc);
@@ -4351,7 +4352,7 @@ int ExecForeignDDL(Oid serverOid,
     }
 
     if (IS_S3_PATH(dirname) || parquetIsS3Filenames(filenames))
-        s3_client = parquetGetConnection(user, use_minio);
+        s3_client = parquetGetConnection(user, options);
     else
         s3_client = NULL;
 

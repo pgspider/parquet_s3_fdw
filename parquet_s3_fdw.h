@@ -51,6 +51,8 @@ typedef struct parquet_s3_server_opt
 	bool		use_minio;		/* Connect to MinIO instead of Amazon S3. */
 	bool		keep_connections;	/* setting value of keep_connections
 									 * server option */
+	bool        use_credential_provider; /* Retrieve AWS credentials using
+	                                      * AWS Credential providers */
 	char	   *region;			/* AWS region to connect to */
 	char	   *endpoint;		/* Address and port to connect to */
 }			parquet_s3_server_opt;
@@ -71,6 +73,7 @@ int	ExecForeignDDL(Oid serverOid,
 /* Option name for CREATE FOREIGN SERVER. */
 #define SERVER_OPTION_USE_MINIO "use_minio"
 #define SERVER_OPTION_KEEP_CONNECTIONS "keep_connections"
+#define SERVER_OPTION_USE_CREDENTIAL_PROVIDER "use_credential_provider"
 #define SERVER_OPTION_REGION "region"
 #define SERVER_OPTION_ENDPOINT "endpoint"
 

@@ -58,7 +58,7 @@ typedef enum FileLocation_t
 /*
  * We would like to cache FileReader. When creating new hash entry,
  * the memory of entry is allocated by PostgreSQL core. But FileReader is
- * a unique_ptr. In order to initialize it in parquet_s3_fdw, we define 
+ * a unique_ptr. In order to initialize it in parquet_s3_fdw, we define
  * FileReaderCache class and the cache entry has the pointer of this class.
  */
 class FileReaderCache
@@ -84,7 +84,7 @@ extern List *extract_parquet_fields(const char *path, const char *dirname, Aws::
 extern char *create_foreign_table_query(const char *tablename, const char *schemaname, const char *servername,
                                          char **paths, int npaths, List *fields, List *options);
 
-extern Aws::S3::S3Client *parquetGetConnection(UserMapping *user, bool use_minio);
+extern Aws::S3::S3Client *parquetGetConnection(UserMapping *user, parquet_s3_server_opt* option);
 extern Aws::S3::S3Client *parquetGetConnectionByTableid(Oid foreigntableid, Oid userid);
 extern void parquetReleaseConnection(Aws::S3::S3Client *conn);
 extern List* parquetGetS3ObjectList(Aws::S3::S3Client *s3_cli, const char *s3path);
