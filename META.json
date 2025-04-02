@@ -1,0 +1,45 @@
+{
+   "name": "parquet_s3_fdw",
+   "abstract": "Parquet S3 Foreign Data Wrapper",
+   "description": "This PostgreSQL extension is a Foreign Data Wrapper (FDW) for accessing Parquet file on local file system and Amazon S3.",
+   "version": "0.2.1",
+   "maintainer": "pgspider",
+   "license": "postgresql",
+   "provides": {
+      "parquet_s3_fdw": {
+         "abstract": "JDBC Foreign Data Wrapper",
+         "file": "parquet_s3_fdw.cpp",
+         "docfile": "README.md",
+         "version": "0.2.1"
+      }
+   },
+   "prereqs": {
+      "runtime": {
+         "requires": {
+            "PostgreSQL": "13.0.0"
+         }
+      }
+   },
+   "resources": {
+      "bugtracker": {
+         "web": "https://github.com/pgspider/parquet_s3_fdw/issues"
+      },
+      "repository": {
+        "url":  "git://github.com/pgspider/parquet_s3_fdw.git",
+        "web":  "https://github.com/pgspider/parquet_s3_fdw",
+        "type": "git"
+      }
+   },
+   "generated_by": "David E. Wheeler",
+   "meta-spec": {
+      "version": "1.0.0",
+      "url": "http://pgxn.org/meta/spec.txt"
+   },
+   "tags": [
+      "parquet",
+      "s3",
+      "fdw",
+      "foreign data wrapper",
+      "parquet_s3_fdw"
+   ]
+}
